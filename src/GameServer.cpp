@@ -265,6 +265,9 @@ bool GameServer::playerAttack(Player* player, Monster* monster, int damage) {
 
         // ── 기여도 기반 경험치 분배 (Lua formula — RELOAD formula 핫픽스 가능) ──
         distributeExp(monster);
+
+        // ── 아이템 드롭 (Lua formula.getDropTable — RELOAD formula 핫픽스 가능) ──
+        dropItemsFromMonster(monster);
     }
     return true;
 }
@@ -442,6 +445,21 @@ void GameServer::onTick() {
                           << "' HP regen +" << p->hpRegen
                           << " -> " << p->hp << "/" << p->maxHp << "\n";
             }
+        }
+    }
+
+    // ── 바닥 아이템 만료 ──────────────────────────────────────────────
+    for (auto it = groundItems_.begin(); it != groundItems_.end(); ) {
+        float age = std::chrono::duration<float>(now - it->second.dropTime).count();
+        if (age >= GROUND_ITEM_EXPIRE_SEC) {
+            auto expireEvent = json{
+                {"type", "item_expire"},
+                {"groundId", it->second.id}
+            }.dump();
+            broadcastEvent(expireEvent);
+            it = groundItems_.erase(it);
+        } else {
+            ++it;
         }
     }
 
@@ -816,6 +834,54 @@ void GameServer::grantExpAndLevelUp(Player* player, int expGain) {
 }
 
 // ================================================================
+// 몬스터 사망 시 아이템 드롭
+// ================================================================
+
+void GameServer::dropItemsFromMonster(Monster* monster) {
+    auto dropTable = lua_->getDropTable(monster);
+    if (dropTable.empty()) return;
+
+    static std::mt19937 dropRng(std::random_device{}());
+    std::uniform_int_distribution<int> pct(0, 99);
+
+    for (auto& drop : dropTable) {
+        if (pct(dropRng) >= drop.chance) continue;  // 확률 미스
+
+        int qty = drop.minQty;
+        if (drop.maxQty > drop.minQty) {
+            std::uniform_int_distribution<int> qDist(drop.minQty, drop.maxQty);
+            qty = qDist(dropRng);
+        }
+
+        // 몬스터 위치 근처에 약간 흩뿌려 드롭
+        std::uniform_real_distribution<float> offset(-2.0f, 2.0f);
+        auto mapCfg = lua_->getMapConfig();
+        float dx = std::max(0.f, std::min(mapCfg.width  - 0.01f, monster->pos.x + offset(dropRng)));
+        float dy = std::max(0.f, std::min(mapCfg.height - 0.01f, monster->pos.y + offset(dropRng)));
+
+        int gid = nextGroundItemId_++;
+        groundItems_[gid] = {gid, drop.itemId, qty, {dx, dy}, std::chrono::steady_clock::now()};
+
+        auto info = lua_->getItemInfo(drop.itemId);
+        std::cout << "[GameServer] Monster '" << monster->name
+                  << "' dropped " << info.name << " x" << qty
+                  << " at (" << dx << ", " << dy << ")\n";
+
+        // 드롭 이벤트 브로드캐스트
+        auto dropEvent = json{
+            {"type",     "item_drop"},
+            {"groundId", gid},
+            {"itemId",   drop.itemId},
+            {"name",     info.name},
+            {"qty",      qty},
+            {"x",        dx},
+            {"y",        dy}
+        }.dump();
+        broadcastEvent(dropEvent);
+    }
+}
+
+// ================================================================
 // Protocol (line-based text)
 //   CONNECT <name> [level:<N>] [gender:<N>]
 //   ATTACK <monster_id> [damage:<N>]
@@ -901,8 +967,92 @@ std::string GameServer::processCommand(int playerId, const std::string& line) {
         std::string sub; ss >> sub;
         std::transform(sub.begin(), sub.end(), sub.begin(), ::toupper);
         int itemId = 0; ss >> itemId;
-        if (sub == "USE") { playerUseItem(player, itemId); return "OK: Used item " + std::to_string(itemId); }
+        if (sub == "USE") {
+            if (player->getItemCount(itemId) <= 0)
+                return "ERR: You don't have item " + std::to_string(itemId);
+            if (!lua_->canUseItem(player, itemId))
+                return "ERR: Cannot use item " + std::to_string(itemId);
+            lua_->useItem(player, itemId);
+            player->removeItem(itemId, 1);
+            auto info = lua_->getItemInfo(itemId);
+            auto useEvent = json{
+                {"type", "item_used"},
+                {"playerId", player->id},
+                {"itemId", itemId},
+                {"name", info.name},
+                {"remaining", player->getItemCount(itemId)}
+            }.dump();
+            broadcastEvent(useEvent);
+            return "OK: Used " + info.name + " (remaining: " + std::to_string(player->getItemCount(itemId)) + ")";
+        }
         return "ERR: ITEM USE <id>";
+    }
+
+    if (cmd == "PICKUP") {
+        int groundId = 0; ss >> groundId;
+        auto it = groundItems_.find(groundId);
+        if (it == groundItems_.end())
+            return "ERR: Ground item " + std::to_string(groundId) + " not found";
+        auto& gi = it->second;
+        float dist = player->pos.distanceTo(gi.pos);
+        if (dist > PICKUP_RANGE)
+            return "ERR: Too far (dist=" + std::to_string(dist).substr(0,5) + ", need <=" + std::to_string(PICKUP_RANGE).substr(0,3) + ")";
+        player->addItem(gi.itemId, gi.qty);
+        auto info = lua_->getItemInfo(gi.itemId);
+        auto pickupEvent = json{
+            {"type", "item_pickup"},
+            {"playerId", player->id},
+            {"groundId", groundId},
+            {"itemId", gi.itemId},
+            {"name", info.name},
+            {"qty", gi.qty}
+        }.dump();
+        broadcastEvent(pickupEvent);
+        groundItems_.erase(it);
+        return "OK: Picked up " + info.name + " x" + std::to_string(gi.qty);
+    }
+
+    if (cmd == "SHOP") {
+        std::string sub; ss >> sub;
+        std::transform(sub.begin(), sub.end(), sub.begin(), ::toupper);
+        if (sub == "LIST") {
+            auto shopList = lua_->getShopList();
+            json resp;
+            resp["type"] = "shop_list";
+            json items = json::array();
+            for (auto& si : shopList) {
+                items.push_back({{"id", si.id}, {"name", si.name}, {"price", si.price}, {"desc", si.desc}});
+            }
+            resp["items"] = items;
+            return resp.dump();  // JSON 직접 반환 → 요청 플레이어에게만 전송
+        }
+        if (sub == "BUY") {
+            int itemId = 0, qty = 1;
+            ss >> itemId;
+            if (ss.peek() != EOF) ss >> qty;
+            if (qty <= 0) qty = 1;
+            auto info = lua_->getItemInfo(itemId);
+            if (info.price <= 0) return "ERR: Item " + std::to_string(itemId) + " not for sale";
+            int totalCost = info.price * qty;
+            if (player->coin < totalCost)
+                return "ERR: Not enough coins (" + std::to_string(player->coin) + "/" + std::to_string(totalCost) + ")";
+            player->coin -= totalCost;
+            player->addItem(itemId, qty);
+            std::cout << "[GameServer] " << player->name << " bought " << info.name
+                      << " x" << qty << " for " << totalCost << " coins\n";
+            auto buyEvent = json{
+                {"type", "shop_buy"},
+                {"playerId", player->id},
+                {"itemId", itemId},
+                {"name", info.name},
+                {"qty", qty},
+                {"cost", totalCost},
+                {"coin", player->coin}
+            }.dump();
+            broadcastEvent(buyEvent);
+            return "OK: Bought " + info.name + " x" + std::to_string(qty) + " (-" + std::to_string(totalCost) + " coin)";
+        }
+        return "ERR: SHOP LIST | SHOP BUY <item_id> [qty]";
     }
 
     if (cmd == "QUEST") {
@@ -1003,6 +1153,13 @@ std::string GameServer::getStateJson(int playerId) {
             {"exp",         p->exp},
             {"expToNext",   lua_->getExpToLevel(p->level)}
         };
+        // 인벤토리
+        json inv = json::object();
+        for (auto& [itemId, qty] : p->inventory) {
+            auto info = lua_->getItemInfo(itemId);
+            inv[std::to_string(itemId)] = {{"qty", qty}, {"name", info.name}};
+        }
+        j["player"]["inventory"] = inv;
     } else {
         j["player"] = nullptr;
     }
@@ -1033,6 +1190,17 @@ std::string GameServer::getStateJson(int playerId) {
         });
     }
     j["players"] = players;
+
+    // 바닥 아이템
+    json gItems = json::array();
+    for (auto& [gid, gi] : groundItems_) {
+        auto info = lua_->getItemInfo(gi.itemId);
+        gItems.push_back({
+            {"id", gi.id}, {"itemId", gi.itemId}, {"name", info.name},
+            {"qty", gi.qty}, {"x", gi.pos.x}, {"y", gi.pos.y}
+        });
+    }
+    j["groundItems"] = gItems;
 
     return j.dump();
 }

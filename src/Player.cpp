@@ -48,9 +48,35 @@ void Player::removeQuestData(int questId) {
     questData.erase(questId);
 }
 
+void Player::addItem(int itemId, int count) {
+    inventory[itemId] += count;
+    std::cout << "[Player:" << name << "] addItem(" << itemId << " x" << count
+              << "), total=" << inventory[itemId] << "\n";
+}
+
+bool Player::removeItem(int itemId, int count) {
+    auto it = inventory.find(itemId);
+    if (it == inventory.end() || it->second < count) return false;
+    it->second -= count;
+    if (it->second <= 0) inventory.erase(it);
+    std::cout << "[Player:" << name << "] removeItem(" << itemId << " x" << count << ")\n";
+    return true;
+}
+
+int Player::getItemCount(int itemId) const {
+    auto it = inventory.find(itemId);
+    return it != inventory.end() ? it->second : 0;
+}
+
 void Player::printStatus() const {
     std::cout << "=== Player: " << name << " (ID=" << id << ") ===\n"
               << "  Level=" << level << " Gender=" << gender << "\n"
               << "  HP=" << hp << "/" << maxHp << "  Coin=" << coin << "\n"
               << "  Pos=" << pos.toString() << "\n";
+    if (!inventory.empty()) {
+        std::cout << "  Inventory:";
+        for (auto& [id, cnt] : inventory)
+            std::cout << " [" << id << "]x" << cnt;
+        std::cout << "\n";
+    }
 }

@@ -44,3 +44,27 @@ function item_manager.use(owner, item_id)
         item.useItem(owner)
     end
 end
+
+-- 상점 목록: getInfo()가 있는 아이템 중 price > 0 인 것
+function item_manager.getShopList()
+    local list = {}
+    for id, item in pairs(items) do
+        if item.getInfo then
+            local info = item.getInfo()
+            if info.price and info.price > 0 then
+                table.insert(list, info)
+            end
+        end
+    end
+    table.sort(list, function(a, b) return a.id < b.id end)
+    return list
+end
+
+-- 아이템 정보 조회
+function item_manager.getInfo(item_id)
+    local item = item_manager.get(item_id)
+    if item and item.getInfo then
+        return item.getInfo()
+    end
+    return nil
+end

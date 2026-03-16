@@ -18,7 +18,7 @@ bool LuaEngine::initialize(const std::string& dir) {
         }
     }
     registerQuestManagerExtensions();
-    for (const char* c : {"item.1000", "buff.1000", "quest.1000", "player.base"})
+    for (const char* c : {"item.1000", "item.1001", "item.1002", "buff.1000", "quest.1000", "player.base"})
         loadScript(c);
     std::cout << "[LuaEngine] Initialized. Script dir: " << scriptDir << "\n";
     return true;
@@ -40,8 +40,15 @@ void LuaEngine::registerTypes() {
                                 [](Player& p, int v)  { p.coin   = v;  }),
         "hp",     sol::property([](const Player& p) { return p.hp;     },
                                 [](Player& p, int v)  { p.hp     = v;  }),
+        "maxHp",  sol::readonly_property([](const Player& p) { return p.maxHp; }),
+        "exp",    sol::readonly_property([](const Player& p) { return p.exp; }),
+        "job",    sol::readonly_property([](const Player& p) { return p.job; }),
         "addCoin",         &Player::addCoin,
+        "addHP",           &Player::addHP,
         "AddHP",           &Player::addHP,
+        "addItem",         &Player::addItem,
+        "removeItem",      &Player::removeItem,
+        "getItemCount",    &Player::getItemCount,
         "setQuestData",    &Player::setQuestData,
         "addQuestData",    &Player::addQuestData,
         "removeQuestData", &Player::removeQuestData,
@@ -68,7 +75,8 @@ void LuaEngine::registerTypes() {
         "level", sol::readonly_property([](const Monster& m) { return m.level; }),
         "hp",    sol::readonly_property([](const Monster& m) { return m.hp;    }),
         "maxHp", sol::readonly_property([](const Monster& m) { return m.maxHp; }),
-        "coin",  sol::readonly_property([](const Monster& m) { return m.coin;  })
+        "coin",    sol::readonly_property([](const Monster& m) { return m.coin;  }),
+        "isElite", sol::readonly_property([](const Monster& m) { return m.isElite; })
     );
 }
 
@@ -233,8 +241,16 @@ int LuaEngine::getExpToLevel(int level) {
 LuaEngine::DeathPenalty LuaEngine::getDeathPenalty(Player* p) {
     DeathPenalty def{ 1, 0 };
     sol::protected_function f = lua["formula"]["deathPenalty"];
-    if (!f.valid()) return def;
-    auto res = f(playerObj(p));
+    if (!f.valid()) {
+        std::cerr << "[LuaEngine] formula.deathPenalty: function not found, using fallback resetLevel=1\n";
+        return def;
+    }
+    auto pObj = playerObj(p);
+    if (pObj == sol::lua_nil) {
+        std::cerr << "[LuaEngine] formula.deathPenalty: player object is nil (id=" << p->id << "), using fallback resetLevel=1\n";
+        return def;
+    }
+    auto res = f(pObj);
     if (!res.valid()) {
         sol::error e = res;
         std::cerr << "[LuaEngine] formula.deathPenalty: " << e.what() << "\n";
@@ -243,6 +259,8 @@ LuaEngine::DeathPenalty LuaEngine::getDeathPenalty(Player* p) {
     sol::table t = res;
     def.resetLevel = t.get_or("resetLevel", def.resetLevel);
     def.resetExp   = t.get_or("resetExp",   def.resetExp);
+    std::cout << "[LuaEngine] deathPenalty: player lv=" << p->level
+              << " -> resetLevel=" << def.resetLevel << ", resetExp=" << def.resetExp << "\n";
     return def;
 }
 
@@ -477,6 +495,74 @@ LuaEngine::TickConfig LuaEngine::getTickConfig() {
     }
     sol::table t = res;
     def.tickMs = t.get_or("tickMs", def.tickMs);
+    return def;
+}
+
+// ================================================================
+// 아이템 드롭 · 상점
+// ================================================================
+
+std::vector<LuaEngine::DropEntry> LuaEngine::getDropTable(Monster* m) {
+    std::vector<DropEntry> result;
+    sol::protected_function f = lua["formula"]["getDropTable"];
+    if (!f.valid()) return result;
+    auto res = f(monsterObj(m));
+    if (!res.valid()) {
+        sol::error e = res;
+        std::cerr << "[LuaEngine] formula.getDropTable: " << e.what() << "\n";
+        return result;
+    }
+    sol::table t = res;
+    for (size_t i = 1; i <= t.size(); ++i) {
+        sol::table row = t[i];
+        result.push_back({
+            row.get_or("itemId", 0),
+            row.get_or("chance", 0),
+            row.get_or("minQty", 1),
+            row.get_or("maxQty", 1)
+        });
+    }
+    return result;
+}
+
+std::vector<LuaEngine::ShopItem> LuaEngine::getShopList() {
+    std::vector<ShopItem> result;
+    sol::protected_function f = lua["item_manager"]["getShopList"];
+    if (!f.valid()) return result;
+    auto res = f();
+    if (!res.valid()) {
+        sol::error e = res;
+        std::cerr << "[LuaEngine] item_manager.getShopList: " << e.what() << "\n";
+        return result;
+    }
+    sol::table t = res;
+    for (size_t i = 1; i <= t.size(); ++i) {
+        sol::table row = t[i];
+        result.push_back({
+            row.get_or("id", 0),
+            row.get_or<std::string>("name", "Unknown"),
+            row.get_or("price", 0),
+            row.get_or<std::string>("desc", "")
+        });
+    }
+    return result;
+}
+
+LuaEngine::ShopItem LuaEngine::getItemInfo(int itemId) {
+    ShopItem def{itemId, "Unknown", 0, ""};
+    sol::protected_function f = lua["item_manager"]["getInfo"];
+    if (!f.valid()) return def;
+    auto res = f(itemId);
+    if (!res.valid()) {
+        sol::error e = res;
+        std::cerr << "[LuaEngine] item_manager.getInfo: " << e.what() << "\n";
+        return def;
+    }
+    if (res.get_type() == sol::type::lua_nil) return def;
+    sol::table t = res;
+    def.name  = t.get_or<std::string>("name", def.name);
+    def.price = t.get_or("price", def.price);
+    def.desc  = t.get_or<std::string>("desc", def.desc);
     return def;
 }
 

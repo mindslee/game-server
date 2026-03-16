@@ -127,6 +127,25 @@ public:
     };
     TickConfig getTickConfig();
 
+    // 아이템 드롭 (formula.getDropTable — RELOAD formula 핫픽스 가능)
+    struct DropEntry {
+        int itemId;
+        int chance;   // 0~100 (%)
+        int minQty;
+        int maxQty;
+    };
+    std::vector<DropEntry> getDropTable(Monster* monster);
+
+    // 상점 목록 (item_manager.getShopList)
+    struct ShopItem {
+        int         id;
+        std::string name;
+        int         price;
+        std::string desc;
+    };
+    std::vector<ShopItem> getShopList();
+    ShopItem getItemInfo(int itemId);  // 개별 아이템 정보
+
     // 각 매니저 프록시
     bool applyBuff(Player* owner, int buffId);
     bool removeBuff(Player* owner, int buffId);

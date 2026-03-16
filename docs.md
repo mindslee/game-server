@@ -18,9 +18,11 @@
 10. [핫 리로드](#10-핫-리로드)
 11. [전투 시스템](#11-전투-시스템)
 12. [성장 시스템](#12-성장-시스템)
-13. [직업 시스템](#13-직업-시스템)
-14. [클래스 레퍼런스](#14-클래스-레퍼런스)
-15. [테스트 세션 예시](#15-테스트-세션-예시)
+13. [인벤토리·아이템·상점 시스템](#13-인벤토리아이템상점-시스템)
+14. [직업 시스템](#14-직업-시스템)
+15. [클라이언트 자동 행동](#15-클라이언트-자동-행동)
+16. [클래스 레퍼런스](#16-클래스-레퍼런스)
+17. [테스트 세션 예시](#17-테스트-세션-예시)
 
 ---
 
@@ -74,7 +76,9 @@ project/
         ├── class_manager.lua       ← 직업별 스탯 정의 (RELOAD로 핫픽스 가능)
         ├── formula.lua             ← 전투·경험치·스폰·AI·맵 공식 통합 모듈 (RELOAD 핫픽스)
         ├── buff/1000.lua
-        ├── item/1000.lua
+        ├── item/1000.lua           ← 소형 체력물약 (heal 50, 100코인)
+        ├── item/1001.lua           ← 중형 체력물약 (heal 100, 300코인)
+        ├── item/1002.lua           ← 대형 체력물약 (heal 150, 500코인)
         ├── quest/1000.lua
         └── player/base.lua         ← 기본 플레이어 이벤트 핸들러 (onKill 코인 획득)
 ```
@@ -104,13 +108,15 @@ GameServer (게임 로직, gameMutex_)
     │     └── 리스폰 대기열 처리
     │
     ├── Map (위치/범위 검사)
+    ├── groundItems_ (드롭 아이템 관리, 60초 만료)
     │
     └── LuaEngine (sol2)
           ├── event_manager.publish → onAttack / onKill / onStruck
           ├── buff_manager / item_manager / quest_manager
           ├── player_manager → player/base.lua (onKill 코인 획득)
           ├── class_manager.getStats(job, level) → 직업별 스탯 조회
-          └── formula.lua → 전투·경험치·스폰·AI·맵 공식 (RELOAD 핫픽스)
+          ├── formula.lua → 전투·경험치·스폰·AI·맵·드롭·기여도 공식
+          └── item/1000~1002 → 체력물약 (사용 시 HP 회복)
 
 TCP 클라이언트 (telnet, 포트 7000)
     │  텍스트 라인 프로토콜
@@ -335,7 +341,10 @@ telnet 127.0.0.1 7000
 | STRUCK | `STRUCK <monster_id>` | 몬스터에게 피격 이벤트 |
 | KILL | `KILL <monster_id>` | 수동 처치 이벤트 (테스트용) |
 | BUFF ADD/REMOVE | `BUFF ADD <id>` / `BUFF REMOVE <id>` | 버프 적용/해제 |
-| ITEM USE | `ITEM USE <id>` | 아이템 사용 |
+| ITEM USE | `ITEM USE <id>` | 인벤토리 아이템 사용 (보유 확인 + 소모) |
+| PICKUP | `PICKUP <groundItemId>` | 바닥 아이템 줍기 (거리 ≤ 3.0) |
+| SHOP LIST | `SHOP LIST` | 상점 아이템 목록 조회 (요청자에게만 응답) |
+| SHOP BUY | `SHOP BUY <itemId> [qty]` | 상점 아이템 구매 (코인 차감) |
 | QUEST ACCEPT/COMPLETE/REMOVE | `QUEST <ACTION> <id>` | 퀘스트 처리 |
 | STATUS | `STATUS` | 플레이어 현재 상태 |
 | RELOAD | `RELOAD <module>` | Lua 스크립트 핫 리로드 |
@@ -374,7 +383,10 @@ telnet 127.0.0.1 7000
 { "cmd": "attack",  "monsterId": 2000 }
 { "cmd": "struck",  "monsterId": 2000 }
 { "cmd": "buff",    "action": "add",    "buffId": 1000 }
-{ "cmd": "item",    "itemId": 1000 }
+{ "cmd": "item",    "action": "USE", "itemId": 1000 }
+{ "cmd": "pickup",  "groundItemId": 42 }
+{ "cmd": "shop",    "action": "list" }
+{ "cmd": "shop",    "action": "buy", "itemId": 1000, "qty": 1 }
 { "cmd": "quest",   "action": "accept", "questId": 1000 }
 { "cmd": "reload",  "module": "buff.1000" }
 { "cmd": "status" }
@@ -405,8 +417,15 @@ telnet 127.0.0.1 7000
     "hpRegen": 10,
     "job": "warrior",
     "exp": 250,
-    "expToNext": 500
+    "expToNext": 500,
+    "inventory": [
+      { "itemId": 1000, "count": 3, "name": "소형 체력물약" },
+      { "itemId": 1001, "count": 1, "name": "중형 체력물약" }
+    ]
   },
+  "groundItems": [
+    { "id": 42, "itemId": 1000, "qty": 1, "x": 20.5, "y": 21.3 }
+  ],
   "monsters": [
     {
       "id": 2000, "name": "Goblin", "level": 1,
@@ -451,6 +470,37 @@ telnet 127.0.0.1 7000
 { "type": "player_death",
   "playerId": 5000, "name": "영웅",
   "killedBy": "Goblin" }
+
+// 아이템 드롭 (몬스터 처치 시)
+{ "type": "item_drop",
+  "groundItemId": 42, "itemId": 1000, "itemName": "소형 체력물약",
+  "qty": 1, "x": 20.5, "y": 21.3 }
+
+// 바닥 아이템 만료 (60초 경과)
+{ "type": "item_expire", "groundItemId": 42 }
+
+// 아이템 줍기
+{ "type": "item_pickup",
+  "playerId": 5000, "playerName": "영웅",
+  "groundItemId": 42, "itemId": 1000, "itemName": "소형 체력물약", "qty": 1 }
+
+// 아이템 사용 (인벤토리)
+{ "type": "item_used",
+  "playerId": 5000, "itemId": 1000, "itemName": "소형 체력물약" }
+
+// 상점 구매
+{ "type": "shop_buy",
+  "playerId": 5000, "itemId": 1000, "itemName": "소형 체력물약",
+  "qty": 1, "cost": 100 }
+
+// 경험치 분배 (기여도 기반)
+{ "type": "exp_distribute",
+  "monsterId": 2000, "monsterName": "Goblin",
+  "shares": [{ "playerId": 5000, "exp": 80 }, { "playerId": 5001, "exp": 20 }] }
+
+// 상점 목록 (요청자에게만 전송, broadcast 아님)
+{ "type": "shop_list",
+  "items": [{ "id": 1000, "name": "소형 체력물약", "price": 100, "desc": "HP 50 회복" }, ...] }
 ```
 
 ### 7.3 WebSocket 구현 (WsServer.cpp)
@@ -625,7 +675,7 @@ for (let i = 0; i < players.length; i++)
 
 #### 사망 오버레이
 
-플레이어 사망 시 화면 전체에 반투명 빨간 오버레이와 "💀 사망" 텍스트가 3초간 표시된다. 이후 자동으로 레벨 1 리스폰된다.
+플레이어 사망 시 화면 전체에 반투명 빨간 오버레이와 "💀 사망 패널티 적용" 텍스트가 3초간 표시된다. 이후 자동으로 레벨 절반(올림)으로 리스폰된다.
 
 ---
 
@@ -676,7 +726,11 @@ void GameServer::broadcastEvent(const std::string& eventJson) {
 | --- | --- | --- |
 | connect, move, attack | broadcastToOthers | 게임 상태 변화 |
 | struck, kill, buff, item, quest | broadcastToOthers | 게임 상태 변화 |
+| pickup | broadcastEvent (item_pickup) | 바닥 아이템 제거 동기화 |
 | 공격 결과, 몬스터 반격, 레벨업, 사망 | broadcastEvent | 게임 루프 이벤트 |
+| 아이템 드롭, 만료, 사용, 구매 | broadcastEvent | 게임 상태 동기화 |
+| 경험치 분배 | broadcastEvent (exp_distribute) | 기여도별 EXP 안내 |
+| shop list | 직접 JSON 응답 (요청자만) | 개인 UI 데이터 |
 | status, look, reload | 없음 | 읽기 전용 |
 | 오류 응답 | 없음 | 상태 변화 없음 |
 
@@ -702,7 +756,7 @@ void GameServer::broadcastEvent(const std::string& eventJson) {
 7. class_manager.lua   ← 직업별 스탯 (RELOAD 핫픽스 가능)
 8. formula.lua         ← 전투·경험치·스폰·AI·맵 공식 (RELOAD 핫픽스 가능)
    (registerQuestManagerExtensions — C++ 측 getQuestTable 주입)
-9. item.1000 / buff.1000 / quest.1000 / player.base  ← 개별 스크립트
+9. item.1000 / item.1001 / item.1002 / buff.1000 / quest.1000 / player.base  ← 개별 스크립트
 ```
 
 ### 9.2 Lua 파일 목록
@@ -711,14 +765,16 @@ void GameServer::broadcastEvent(const std::string& eventJson) {
 | --- | --- | --- |
 | `event_manager.lua` | `event_manager` | Pub/Sub 이벤트 버스 |
 | `buff_manager.lua` | `buff_manager` | 버프 적용/해제, 리스너 등록 |
-| `item_manager.lua` | `item_manager` | 아이템 사용 가능 여부 + 처리 |
+| `item_manager.lua` | `item_manager` | 아이템 등록/사용/상점 목록/아이템 정보 조회 |
 | `quest_manager.lua` | `quest_manager` | 퀘스트 수락/완료/제거 |
 | `monster_manager.lua` | `monster_manager` | 몬스터 관련 스크립트 |
 | `player_manager.lua` | `player_manager` | 플레이어 스크립트 등록/관리 |
 | `class_manager.lua` | `class_manager` | 직업·레벨별 스탯 반환 (`getStats(job, level)`) |
-| `formula.lua` | `formula` | 전투·경험치·스폰·AI·맵 공식 통합 모듈 (13개 함수) |
+| `formula.lua` | `formula` | 전투·경험치·스폰·AI·맵·드롭·기여도 공식 통합 모듈 |
 | `buff/1000.lua` | — | 버프 1000: 공격 시 +10코인, 피격 시 -10코인 |
-| `item/1000.lua` | — | 아이템 1000: 즉시 사용 효과 |
+| `item/1000.lua` | — | 소형 체력물약: HP 50 회복, 100코인 |
+| `item/1001.lua` | — | 중형 체력물약: HP 100 회복, 300코인 |
+| `item/1002.lua` | — | 대형 체력물약: HP 150 회복, 500코인 |
 | `quest/1000.lua` | — | 퀘스트 1000: Goblin 5마리 처치 |
 | `player/base.lua` | — | 기본 플레이어 스크립트: onKill 시 몬스터 코인 획득 |
 
@@ -734,8 +790,15 @@ lua.new_usertype<Player>("Player",
     "gender",         sol::property(getter, setter),
     "coin",           sol::property(getter, setter),
     "hp",             sol::property(getter, setter),
+    "maxHp",          sol::property(getter, setter),
+    "exp",            sol::property(getter, setter),
+    "job",            sol::readonly_property(/* ... */),
     "addCoin",        &Player::addCoin,
     "AddHP",          &Player::addHP,
+    "addHP",          &Player::addHP,        // 소문자 별칭
+    "addItem",        &Player::addItem,
+    "removeItem",     &Player::removeItem,
+    "getItemCount",   &Player::getItemCount,
     "setQuestData",   &Player::setQuestData,
     "addQuestData",   &Player::addQuestData,
     "removeQuestData",&Player::removeQuestData,
@@ -751,9 +814,10 @@ lua.new_usertype<Monster>("Monster",
     "name",  sol::readonly_property(/* ... */),
     "type",  sol::readonly_property(/* ... */),  // 항상 "Monster"
     "level", sol::readonly_property(/* ... */),
-    "hp",    sol::readonly_property(/* ... */),
-    "maxHp", sol::readonly_property(/* ... */),
-    "coin",  sol::readonly_property(/* ... */)
+    "hp",      sol::readonly_property(/* ... */),
+    "maxHp",   sol::readonly_property(/* ... */),
+    "coin",    sol::readonly_property(/* ... */),
+    "isElite", sol::readonly_property(/* ... */)
 );
 ```
 
@@ -766,12 +830,13 @@ C++: playerAttack(player, monster)
   ↓  크리티컬 판정 (formula.getCritical → 확률/배율 조회)
   ↓  actualDamage = isCrit ? attackPower * multiplier : attackPower
   ↓  monster->takeDamage(actualDamage)
+  ↓  monster->addDamageContribution(player->id, actualDamage)
   ↓  monster->aggroTargetId = player->id  (어그로 설정)
   ↓  broadcastEvent("attack_result")
   ↓  monster->isAlive() == false
        ↓  scheduleRespawn(monster)  ← formula.getRespawnConfig() 딜레이
-       ↓  player->exp += formula.expReward(player, monster)
-       ↓  while (exp >= formula.expToLevel(level)) → 레벨업 → applyClassStats
+       ↓  distributeExp(monster)    ← 기여도 기반 EXP 분배
+       ↓  dropItemsFromMonster(monster) ← 아이템 드롭 (확률 기반)
   ↓  publishEvent(player, "onKill", monster)
        ↓  quest.1000::onKill  → player:addQuestData(1000, 2000, 1)
        ↓  player.base::onKill → player:addCoin(monster.coin, 'drop')
@@ -988,26 +1053,51 @@ onTick → warningMs 전 → respawn_soon 이벤트 브로드캐스트
 
 ## 12. 성장 시스템
 
-### 12.1 경험치 (EXP) — formula.lua 핫픽스 가능
+### 12.1 기여도 기반 경험치 분배 — formula.lua 핫픽스 가능
+
+몬스터 처치 시 EXP는 **공격 기여도**에 따라 참여 플레이어 간 분배된다.
+
+#### 기여도 추적 (Monster::Contribution)
+
+| 항목 | 설명 |
+| --- | --- |
+| `damage` | 해당 플레이어가 가한 총 데미지 |
+| `tanking` | 해당 플레이어가 받은 총 데미지 (몬스터 반격) |
+| `lastTime` | 마지막 기여 시각 (만료 판정용) |
+
+기여도는 `onTick`마다 `expireContributions(30초)`로 만료 체크된다. 30초 이상 무기여 시 해당 플레이어의 기여가 삭제된다.
+
+#### 분배 공식 (formula.expDistribute)
+
+```text
+totalExp = formula.expReward(lastAttacker, monster)
+가중치  = damage + tanking × tankingWeight(0.5)
+비율    = 가중치 / 전체합 (최소 minShareRatio=10%)
+파티보너스 = 참여인원별 배율 (2인 1.2x, 3인 1.5x, 4인 1.8x, 5+인 2.0x)
+최종EXP = totalExp × 비율 × 파티보너스
+```
+
+솔로 처치 시 파티보너스 없이 100% 획득.
+
+#### EXP → 레벨업
 
 | 항목 | 기본값 | Lua 함수 |
 | --- | --- | --- |
-| 획득 조건 | 몬스터 처치 | — |
-| 획득량 | `monster.maxHp` | `formula.expReward(player, monster)` |
 | 레벨업 기준 | `level × 100` | `formula.expToLevel(level)` |
-| 다중 레벨업 | while 루프 | C++ |
+| 다중 레벨업 | while 루프 | C++ `grantExpAndLevelUp()` |
 
 ```cpp
-int expGain = lua_->getExpReward(player, monster);  // formula.expReward
-player->exp += expGain;
-int needed = lua_->getExpToLevel(player->level);    // formula.expToLevel
-while (player->exp >= needed) {
-    player->exp -= needed;
-    player->level++;
-    applyClassStats(player, *lua_);  // 직업별 스탯 재계산 (Lua 호출)
-    player->hp = player->maxHp;      // 레벨업 시 HP 완전 회복
-    broadcastEvent(player_levelup_json);
-    needed = lua_->getExpToLevel(player->level);  // 다음 레벨 요구량 갱신
+void GameServer::grantExpAndLevelUp(Player* player, int expGain) {
+    player->exp += expGain;
+    int needed = lua_->getExpToLevel(player->level);
+    while (player->exp >= needed) {
+        player->exp -= needed;
+        player->level++;
+        applyClassStats(player, *lua_);
+        player->hp = player->maxHp;
+        broadcastEvent(player_levelup_json);
+        needed = lua_->getExpToLevel(player->level);
+    }
 }
 ```
 
@@ -1047,24 +1137,108 @@ if (!target->isAlive()) {
 }
 ```
 
-사망 페널티 기본값: `resetLevel=1, resetExp=0` (레벨 1로 리셋). `-1`로 설정하면 해당 값을 유지한다.
+사망 페널티 기본값: `resetLevel = math.ceil(level/2), resetExp = 0`. 예: 레벨 9→5, 8→4, 7→4. `-1`로 설정하면 해당 값을 유지한다.
 
-클라이언트는 `player_death` 이벤트 수신 시 사망 오버레이를 3초간 표시하고, `selectedMonster`, `manualMoveTarget`, `chaseInRange` 등 전투 상태를 모두 초기화한다. 리스폰 후 자동공격이 ON이면 새 위치 기준으로 가장 가까운 몬스터를 자동 선택한다.
+클라이언트는 `player_death` 이벤트 수신 시 사망 오버레이("사망 패널티 적용")를 3초간 표시하고, `selectedMonster`, `manualMoveTarget`, `chaseInRange` 등 전투 상태를 모두 초기화한다. 리스폰 후 자동공격이 ON이면 새 위치 기준으로 가장 가까운 몬스터를 자동 선택한다.
 
 ---
 
-## 13. 직업 시스템
+## 13. 인벤토리·아이템·상점 시스템
 
-### 13.1 직업 종류
+### 13.1 인벤토리
 
-접속 시 두 직업 중 하나를 선택한다. 직업은 플레이어 사망 후 리스폰 시에도 유지된다 (레벨만 1로 초기화).
+플레이어는 `std::map<int,int>` 형태의 인벤토리를 보유한다. 키=아이템ID, 값=수량.
+
+```cpp
+// Player.h
+std::map<int, int> inventory;
+void addItem(int itemId, int count = 1);
+bool removeItem(int itemId, int count = 1);  // 수량 부족 시 false
+int  getItemCount(int itemId) const;
+```
+
+인벤토리는 `getStateJson()`에서 아이템 이름과 함께 클라이언트에 전송된다.
+
+### 13.2 아이템 (체력물약)
+
+| ID | 이름 | 가격 | 효과 | Lua 파일 |
+| --- | --- | --- | --- | --- |
+| 1000 | 소형 체력물약 | 100코인 | HP +50 | `item/1000.lua` |
+| 1001 | 중형 체력물약 | 300코인 | HP +100 | `item/1001.lua` |
+| 1002 | 대형 체력물약 | 500코인 | HP +150 | `item/1002.lua` |
+
+아이템 스크립트 구조:
+
+```lua
+local item = { id = 1000, name = "소형 체력물약", price = 100, heal = 50 }
+
+function item.canUse(owner)   return true end
+function item.useItem(owner)  owner:addHP(item.heal, item.name) end
+function item.getInfo()       return { id=item.id, name=item.name, price=item.price, desc="HP "..item.heal.." 회복" } end
+
+item_manager.register(item)
+```
+
+`ITEM USE` 처리 흐름: 인벤토리 보유 확인 → `canUseItem()` → `removeItem()` → `useItem()` → `item_used` 이벤트 broadcast.
+
+### 13.3 몬스터 아이템 드롭
+
+몬스터 처치 시 `formula.getDropTable(monster)`에서 드롭 테이블을 조회하고, 확률에 따라 바닥 아이템(GroundItem)을 생성한다.
+
+```lua
+function formula.getDropTable(monster)
+    local drops = {
+        { itemId = 1000, chance = 15, minQty = 1, maxQty = 1 },  -- 소형 15%
+        { itemId = 1001, chance = 8,  minQty = 1, maxQty = 1 },  -- 중형 8%
+        { itemId = 1002, chance = 3,  minQty = 1, maxQty = 1 },  -- 대형 3%
+    }
+    if monster.isElite then  -- 엘리트 몬스터: 2배 확률
+        for _, d in ipairs(drops) do d.chance = d.chance * 2 end
+    end
+    return drops
+end
+```
+
+#### GroundItem (바닥 아이템)
+
+```cpp
+struct GroundItem {
+    int id;       // 고유 ID (nextGroundItemId_++)
+    int itemId;   // 아이템 종류
+    int qty;      // 수량
+    Vec2 pos;     // 드롭 위치 (몬스터 사망 위치)
+    std::chrono::steady_clock::time_point dropTime;
+};
+```
+
+| 설정 | 값 |
+| --- | --- |
+| 만료 시간 | 60초 (`GROUND_ITEM_EXPIRE_SEC`) |
+| 줍기 거리 | 3.0 유닛 (`PICKUP_RANGE`) |
+| 만료 시 | `item_expire` 이벤트 broadcast 후 삭제 |
+
+클라이언트에서 바닥 아이템은 황금색 맥동 원(pulsing circle)과 아이템 이름 라벨로 표시된다.
+
+### 13.4 상점 시스템
+
+`SHOP LIST` → `item_manager.getShopList()`에서 등록된 모든 아이템 정보를 반환. **요청한 플레이어에게만** JSON 응답 (broadcast 아님).
+
+`SHOP BUY` → 코인 확인 → `player->addCoin(-cost)` → `player->addItem(itemId, qty)` → `shop_buy` 이벤트 broadcast.
+
+---
+
+## 14. 직업 시스템
+
+### 14.1 직업 종류
+
+접속 시 두 직업 중 하나를 선택한다. 직업은 플레이어 사망 후 리스폰 시에도 유지된다 (레벨은 ceil(level/2)로 감소).
 
 | 직업 | job 값 | maxHp (lv1) | attackSpeed | attackRange | attackPower (lv1) |
 | --- | --- | --- | --- | --- | --- |
 | 전사 | `"warrior"` | 100 | 1.0/sec | 5.0 units | 10 |
 | 궁수 | `"archer"` | 80 | 0.8/sec | 20.0 units | 10 |
 
-### 13.2 스탯 정의 (class_manager.lua)
+### 14.2 스탯 정의 (class_manager.lua)
 
 직업별 스탯값은 C++ 코드가 아닌 Lua 파일에서 관리된다. 서버 재시작 없이 `RELOAD class_manager`로 즉시 반영할 수 있다.
 
@@ -1092,7 +1266,7 @@ function class_manager.getStats(job, level)
 end
 ```
 
-### 13.3 C++ 연동 (LuaEngine::getClassStats)
+### 14.3 C++ 연동 (LuaEngine::getClassStats)
 
 ```cpp
 // LuaEngine.h
@@ -1114,7 +1288,7 @@ LuaEngine::ClassStats LuaEngine::getClassStats(Player* p) {
 }
 ```
 
-### 13.4 스탯 적용 시점
+### 14.4 스탯 적용 시점
 
 `applyClassStats(Player*, LuaEngine&)`는 다음 세 시점에 호출된다:
 
@@ -1122,9 +1296,9 @@ LuaEngine::ClassStats LuaEngine::getClassStats(Player* p) {
 | --- | --- |
 | 플레이어 생성 (`createPlayer`) | 초기 직업 스탯 설정 |
 | 레벨업 (`playerAttack` 내 EXP 처리) | 새 레벨에 맞는 스탯 재계산 |
-| 사망 리스폰 (`onTick` 내 사망 처리) | 레벨 1 기준 직업 스탯으로 초기화 |
+| 사망 리스폰 (`onTick` 내 사망 처리) | 감소된 레벨 기준 직업 스탯으로 초기화 |
 
-### 13.5 핫픽스 절차
+### 14.5 핫픽스 절차
 
 1. `lua/EventManager/class_manager.lua` 수치 수정
 2. 게임 서버 콘솔(telnet/웹)에서 `RELOAD class_manager` 입력
@@ -1133,7 +1307,39 @@ LuaEngine::ClassStats LuaEngine::getClassStats(Player* p) {
 
 ---
 
-## 14. 클래스 레퍼런스
+## 15. 클라이언트 자동 행동
+
+### 17.1 자동 물약 사용
+
+HP가 50% 미만이고 체력물약을 보유하고 있으면 **작은 물약부터** 자동 사용한다.
+
+| 조건 | 동작 |
+| --- | --- |
+| HP < 50% + 물약 보유 + 쿨다운 만료 | 가장 작은 물약(1000→1001→1002) 사용 |
+| 쿨다운 | 5초 (모든 체력물약 공유, `POTION_COOLDOWN_MS=5000`) |
+
+쿨다운은 `item_used` 이벤트 수신 시 갱신된다. 인벤토리 패널에서 잔여 쿨다운을 초 단위로 표시한다.
+
+### 17.2 아이템 줍기 vs 몬스터 공격 선택
+
+타겟 몬스터 사망 후 자동공격 상태에서 주변 아이템과 몬스터를 비교하여 행동을 결정한다.
+
+```text
+아이템이 가장 가까움 → 100% 아이템 줍기
+같은 거리            → 35% 아이템 줍기, 65% 몬스터 공격
+몬스터가 가장 가까움 → 100% 몬스터 공격
+줍기 거리(3.0) 이내  → 즉시 PICKUP 전송
+```
+
+바닥 클릭으로 아이템 쪽을 클릭하면 이동 후 자동 줍기(`pendingPickup`). 도착 시 PICKUP 명령 자동 전송.
+
+### 17.3 인벤토리 UI 최적화
+
+인벤토리 패널은 매 tick(50ms) 갱신되지만, **변경 감지**(JSON.stringify 비교)로 DOM이 실제로 바뀔 때만 innerHTML을 교체한다. 이를 통해 USE 버튼 클릭이 tick에 의해 중단되는 문제를 방지한다.
+
+---
+
+## 16. 클래스 레퍼런스
 
 ### Vec2
 
@@ -1193,6 +1399,7 @@ public:
     int         exp = 0;             // 누적 경험치
 
     std::map<int, std::map<int, int>> questData;  // questId → paramId → value
+    std::map<int, int> inventory;                // itemId → count
 
     std::chrono::steady_clock::time_point lastRegenTime;  // 마지막 HP 재생 시각
 
@@ -1201,6 +1408,9 @@ public:
 
     void addCoin(int amount, const std::string& source);
     void addHP(int amount, const std::string& source);
+    void addItem(int itemId, int count = 1);
+    bool removeItem(int itemId, int count = 1);
+    int  getItemCount(int itemId) const;
     void setQuestData(int questId, int paramId, int value);
     void addQuestData(int questId, int paramId, int value);
     int  getQuestData(int questId, int paramId) const;
@@ -1220,6 +1430,14 @@ public:
 
     int         aggroTargetId = -1;   // 추적 중인 플레이어 ID (-1=없음)
     float       aggroSpeed    = 4.0f; // 추적 속도 (units/sec)
+
+    // 기여도 추적 (EXP 분배용)
+    struct Contribution { int damage=0; int tanking=0; time_point lastTime; };
+    std::map<int, Contribution> contributions;  // playerId → 기여도
+    void addDamageContribution(int playerId, int damage);
+    void addTankingContribution(int playerId, int damage);
+    void expireContributions(float expireSec);
+    void clearContributions();
 
     // 생성자: attackSpeed = 0.8f (초당 0.8회)
 
@@ -1273,6 +1491,20 @@ class LuaEngine {
     struct TickConfig { int tickMs; };
     TickConfig getTickConfig();
 
+    // 기여도 기반 EXP 분배
+    struct ContributionConfig { float expireSec; float tankingWeight; float minShareRatio; std::map<int,float> partyBonus; };
+    struct ContributionEntry { int playerId; int damage; int tanking; float ratio; };
+    struct ExpShareResult { int playerId; int exp; };
+    ContributionConfig getContributionConfig();
+    std::vector<ExpShareResult> getExpDistribute(int totalExp, const std::vector<ContributionEntry>&, const ContributionConfig&);
+
+    // 아이템 드롭/상점
+    struct DropEntry { int itemId; int chance; int minQty; int maxQty; };
+    std::vector<DropEntry> getDropTable(Monster*);
+    struct ShopItem { int id; std::string name; int price; std::string desc; };
+    std::vector<ShopItem> getShopList();
+    ShopItem getItemInfo(int itemId);
+
     bool applyBuff(Player*, int buffId);
     bool removeBuff(Player*, int buffId);
     bool canUseItem(Player*, int itemId);
@@ -1320,14 +1552,23 @@ class GameServer {
     void broadcastEvent(const std::string& json);  // 이벤트 전체 전파
 
     std::string processCommand(int playerId, const std::string& line);
-    std::string getStateJson(int playerId);  // job, attackPower 포함
+    std::string getStateJson(int playerId);  // inventory, groundItems 포함
 
 private:
-    void onTick();          // 20 TPS 게임 루프 (HP재생, 어그로, 반격, 사망처리)
+    // 바닥 아이템
+    std::map<int, GroundItem> groundItems_;
+    int nextGroundItemId_ = 1;
+    static constexpr float GROUND_ITEM_EXPIRE_SEC = 60.0f;
+    static constexpr float PICKUP_RANGE = 3.0f;
+
+    void onTick();          // 20 TPS 게임 루프 (HP재생, 어그로, 반격, 사망처리, 아이템만료)
     void scheduleRespawn(Monster*);
-    bool doRespawn(Monster*);       // 리스폰 처리, 분열 여부 반환
+    bool doRespawn(Monster*);
     void sendRespawnWarning(Monster*);
     void splitSpawn(Monster* parent);
+    void distributeExp(Monster*);           // 기여도 기반 EXP 분배
+    void grantExpAndLevelUp(Player*, int);  // EXP 부여 + 레벨업 처리
+    void dropItemsFromMonster(Monster*);    // 드롭 테이블 기반 아이템 생성
 };
 ```
 
@@ -1363,9 +1604,9 @@ class WsServer {
 
 ---
 
-## 15. 테스트 세션 예시
+## 17. 테스트 세션 예시
 
-### 15.1 웹 클라이언트 사용
+### 17.1 웹 클라이언트 사용
 
 1. `http://localhost:7001` 접속
 2. 이름 입력 후 직업(⚔ 전사 / 🏹 궁수) 선택 → **접속** 버튼
@@ -1373,12 +1614,15 @@ class WsServer {
 4. 몬스터 클릭 → 타겟 선택 및 자동 추적 시작. 사거리 밖이면 접근 후 공격, 사거리 내이면 즉시 공격
 5. **A키**로 자동공격 ON → 타겟 없을 때 가장 가까운 몬스터 자동 선택. 이동 명령 후에는 목적지 도착 시까지 자동 선택 억제
 6. **Escape** → 타겟 해제 (자동공격 ON이면 이후 자동 재선택)
-7. 몬스터 처치 → EXP 획득, 레벨업 시 HP 바 증가 + 공격력 상승
-8. 사망 시 사망 오버레이 표시 → 레벨 1로 자동 리스폰 (직업 유지)
-9. 다른 브라우저 탭에서 동일 URL 접속 → 실시간으로 서로의 위치와 몬스터 HP 변화 확인
-10. 같은 몬스터를 여러 플레이어가 공격 시 각자 슬롯 배분, 화면에서 겹침 없이 표시
+7. 몬스터 처치 → 기여도 기반 EXP 분배, 레벨업 시 HP 바 증가 + 공격력 상승
+8. 몬스터 처치 시 확률적으로 바닥에 체력물약 드롭 → 클릭하여 줍기
+9. 상점 버튼 → 아이템 목록 → 코인으로 구매 → 인벤토리에서 USE 클릭
+10. HP < 50% 시 자동 물약 사용 (5초 공유 쿨다운)
+11. 사망 시 사망 오버레이 표시 → 레벨 절반으로 자동 리스폰 (직업 유지)
+12. 다른 브라우저 탭에서 동일 URL 접속 → 실시간으로 서로의 위치와 몬스터 HP 변화 확인
+13. 같은 몬스터를 여러 플레이어가 공격 시 각자 슬롯 배분, 화면에서 겹침 없이 표시
 
-### 15.2 telnet 수동 테스트
+### 17.2 telnet 수동 테스트
 
 ```text
 telnet 127.0.0.1 7000
@@ -1410,7 +1654,7 @@ QUIT
 BYE
 ```
 
-### 15.3 핫픽스 예시
+### 17.3 핫픽스 예시
 
 #### 직업 스탯 핫픽스
 
@@ -1435,9 +1679,9 @@ BYE
        return { chance = 25, multiplier = 3 }
    end
 
-   -- 사망 시 레벨 유지 (경험치만 리셋)
+   -- 사망 페널티: 기본은 ceil(level/2), 아래는 레벨 유지 예시
    function formula.deathPenalty(player)
-       return { resetLevel = -1, resetExp = 0 }
+       return { resetLevel = -1, resetExp = 0 }  -- 레벨 유지, EXP만 리셋
    end
 
    -- 엘리트 확률 30%, 인구 상한 15
@@ -1452,7 +1696,7 @@ BYE
 3. 즉시 반영 (다음 공격/킬/리스폰부터 새 공식 적용)
 ```
 
-### 15.4 멀티플레이어 동시 접속
+### 17.4 멀티플레이어 동시 접속
 
 - 브라우저 여러 탭 또는 telnet과 브라우저 혼용 모두 가능
 - WS 클라이언트끼리는 실시간 broadcast 수신 (이동/공격/반격/레벨업/사망/리스폰)

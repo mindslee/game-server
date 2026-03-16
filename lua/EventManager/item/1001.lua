@@ -1,13 +1,13 @@
--- 체력 회복 물약 (소형)
+-- 체력 회복 물약 (중형)
 local item = {
-    id    = 1000,
-    name  = "소형 체력물약",
-    price = 100,    -- 상점 구매가
-    heal  = 50,     -- 회복량
+    id    = 1001,
+    name  = "중형 체력물약",
+    price = 300,
+    heal  = 100,
 }
 
 function item.canUse(owner)
-    return true  -- 풀피여도 사용 허용 (초과분은 addHP에서 캡)
+    return true
 end
 
 function item.useItem(owner)

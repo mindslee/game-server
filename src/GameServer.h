@@ -9,6 +9,7 @@
 
 #include <asio.hpp>
 #include "Map.h"
+#include "Vec2.h"
 
 class LuaEngine;
 class Player;
@@ -35,6 +36,15 @@ private:
     bool                    writing_ = false;
 
     static std::atomic<int> nextId_;
+};
+
+// ── 바닥 아이템 (드롭된 아이템) ───────────────────────────────────
+struct GroundItem {
+    int   id;        // 고유 ID
+    int   itemId;    // 아이템 종류
+    int   qty;       // 수량
+    Vec2  pos;       // 위치
+    std::chrono::steady_clock::time_point dropTime;  // 드롭 시각
 };
 
 // ── Game server ─────────────────────────────────────────────────────
@@ -82,6 +92,7 @@ private:
     std::unique_ptr<LuaEngine>              lua_;
     std::map<int, std::unique_ptr<Player>>  players_;
     std::map<int, std::unique_ptr<Monster>> monsters_;
+    std::map<int, GroundItem>               groundItems_;  // 바닥 아이템
     std::recursive_mutex                    gameMutex_;
     Map                                     map_;
 
@@ -97,6 +108,10 @@ private:
     static constexpr int   TICK_MS     = 50;  // fallback
     asio::steady_timer   tickTimer_;
     int nextMonsterId_ = 9000;          // 분열 생성 몬스터 ID 카운터
+    int nextGroundItemId_ = 1;          // 바닥 아이템 ID 카운터
+
+    static constexpr float GROUND_ITEM_EXPIRE_SEC = 60.0f;  // 바닥 아이템 만료 시간
+    static constexpr float PICKUP_RANGE = 3.0f;             // 아이템 줍기 거리
 
     void scheduleTick();
     void onTick();
@@ -108,4 +123,5 @@ private:
     void splitSpawn(Monster* parent);           // 군집 분열: 자식 몬스터 생성
     void distributeExp(Monster* monster);      // 기여도 기반 경험치 분배
     void grantExpAndLevelUp(Player* player, int expGain);  // EXP 지급 + 레벨업 처리
+    void dropItemsFromMonster(Monster* monster); // 몬스터 사망 시 아이템 드롭
 };

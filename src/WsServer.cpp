@@ -197,7 +197,17 @@ void WsSession::wsHandleText(const std::string& text) {
         std::transform(a.begin(), a.end(), a.begin(), ::toupper);
         line = "BUFF " + a + " " + std::to_string(j.value("buffId", 0));
     } else if (cmd == "item") {
-        line = "ITEM USE " + std::to_string(j.value("itemId", 0));
+        std::string action = j.value("action", "use");
+        std::transform(action.begin(), action.end(), action.begin(), ::toupper);
+        line = "ITEM " + action + " " + std::to_string(j.value("itemId", 0));
+    } else if (cmd == "pickup") {
+        line = "PICKUP " + std::to_string(j.value("groundId", 0));
+    } else if (cmd == "shop") {
+        std::string action = j.value("action", "list");
+        std::transform(action.begin(), action.end(), action.begin(), ::toupper);
+        line = "SHOP " + action;
+        if (j.count("itemId")) line += " " + std::to_string(j.value("itemId", 0));
+        if (j.count("qty"))    line += " " + std::to_string(j.value("qty", 1));
     } else if (cmd == "quest") {
         std::string a = j.value("action", "accept");
         std::transform(a.begin(), a.end(), a.begin(), ::toupper);
@@ -218,7 +228,12 @@ void WsSession::wsHandleText(const std::string& text) {
 
     std::string resp = gs_.processCommand(playerId_, line);
     bool isErr = resp.rfind("ERR:", 0) == 0;
-    wsSend(json{{"type", isErr ? "error" : "ok"}, {"msg", resp}}.dump());
+    // JSON 응답은 그대로 전송 (상점 목록 등)
+    if (!resp.empty() && resp[0] == '{') {
+        wsSend(resp);
+    } else {
+        wsSend(json{{"type", isErr ? "error" : "ok"}, {"msg", resp}}.dump());
+    }
     wsSend(gs_.getStateJson(playerId_));
 
     // Broadcast state change to all other connected clients
