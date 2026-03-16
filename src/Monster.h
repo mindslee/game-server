@@ -2,6 +2,7 @@
 #include "Entity.h"
 #include <chrono>
 #include <string>
+#include <map>
 
 class Monster : public Entity {
 public:
@@ -20,4 +21,17 @@ public:
 
     int   aggroTargetId = -1;   // 추격 대상 플레이어 ID (-1 = 없음)
     float aggroSpeed    = 4.0f; // 추격 시 이동 속도 (units/sec)
+
+    // ── 공격 기여도 시스템 ───────────────────────────────────────────
+    struct Contribution {
+        int   damage  = 0;   // 누적 데미지 기여
+        int   tanking = 0;   // 누적 탱킹(피격 흡수) 기여
+        std::chrono::steady_clock::time_point lastTime;  // 마지막 기여 시각
+    };
+    std::map<int, Contribution> contributions;  // playerId → 기여 정보
+
+    void addDamageContribution(int playerId, int damage);
+    void addTankingContribution(int playerId, int damage);
+    void expireContributions(float expireSec);  // 만료된 기여 제거
+    void clearContributions();                  // 리스폰 시 초기화
 };

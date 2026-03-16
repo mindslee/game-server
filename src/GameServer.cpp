@@ -235,6 +235,7 @@ bool GameServer::playerAttack(Player* player, Monster* monster, int damage) {
     int  actualDamage = isCrit ? player->attackPower * crit.multiplier : player->attackPower;
 
     monster->takeDamage(actualDamage);
+    monster->addDamageContribution(player->id, actualDamage);  // 기여도 기록
     monster->aggroTargetId = player->id;  // 어그로 설정
 
     lua_->publishEvent(player, "onAttack", monster);
@@ -262,31 +263,8 @@ bool GameServer::playerAttack(Player* player, Monster* monster, int damage) {
         monster->speed = 0.f;
         scheduleRespawn(monster);
 
-        // ── 경험치 획득 (Lua formula.expReward — RELOAD formula 핫픽스 가능) ──
-        int expGain = lua_->getExpReward(player, monster);
-        player->exp += expGain;
-        std::cout << "[GameServer] Player '" << player->name
-                  << "' gained " << expGain << " EXP (total=" << player->exp << ")\n";
-
-        // ── 레벨업 체크 (Lua formula.expToLevel — RELOAD formula 핫픽스 가능) ──
-        int needed = lua_->getExpToLevel(player->level);
-        while (player->exp >= needed) {
-            player->exp -= needed;
-            player->level++;
-            applyClassStats(player, *lua_);    // 직업별 maxHp·attackPower 재계산
-            player->hp = player->maxHp;        // 레벨업 시 체력 완전 회복
-            std::cout << "[GameServer] Player '" << player->name
-                      << "' leveled up to " << player->level
-                      << "! maxHp=" << player->maxHp << "\n";
-            auto lvEvent = json{
-                {"type",     "player_levelup"},
-                {"playerId", player->id},
-                {"level",    player->level},
-                {"maxHp",    player->maxHp}
-            }.dump();
-            broadcastEvent(lvEvent);
-            needed = lua_->getExpToLevel(player->level);  // 다음 레벨 요구량 갱신
-        }
+        // ── 기여도 기반 경험치 분배 (Lua formula — RELOAD formula 핫픽스 가능) ──
+        distributeExp(monster);
     }
     return true;
 }
@@ -467,10 +445,16 @@ void GameServer::onTick() {
         }
     }
 
-    // ── 몬스터: 리스폰 / 어그로 추격 / 반격 ─────────────────────────
+    // ── 몬스터: 기여도 만료 / 리스폰 / 어그로 추격 / 반격 ──────────
+    auto contribCfg = lua_->getContributionConfig();
     std::vector<Monster*> toSplit;
 
     for (auto& [id, m] : monsters_) {
+        // 살아있는 몬스터: 만료된 기여도 정리
+        if (m->isAlive() && !m->contributions.empty()) {
+            m->expireContributions(contribCfg.expireSec);
+        }
+
         if (!m->isAlive()) {
             // 리스폰 예고 + 실제 리스폰
             if (m->respawnAt != tp{}) {
@@ -508,6 +492,7 @@ void GameServer::onTick() {
                         m->lastAttackTime = now;
                         int dmg = lua_->getMonsterDamage(m.get());
                         target->hp = std::max(0, target->hp - dmg);
+                        m->addTankingContribution(target->id, dmg);  // 탱킹 기여 기록
                         anyChanged = true;
 
                         std::cout << "[GameServer] Monster '" << m->name
@@ -646,11 +631,12 @@ bool GameServer::doRespawn(Monster* m) {
                      std::max(0.f, std::min(mapCfg.height - 0.001f, ny)) };
     m->targetPos = m->pos;
 
-    // ── 6. 타이머·플래그·어그로 해제 ────────────────────────────────
+    // ── 6. 타이머·플래그·어그로·기여도 해제 ────────────────────────
     m->respawnAt     = {};
     m->warningSent   = false;
     m->aggroTargetId = -1;
     m->speed         = 0.f;
+    m->clearContributions();
 
     std::cout << "[GameServer] Monster '" << m->name
               << "' (lv" << m->level << ") respawned at " << m->pos.toString()
@@ -732,6 +718,101 @@ void GameServer::doAccept() {
             std::make_shared<Session>(std::move(socket), *this)->start();
             doAccept();
         });
+}
+
+// ================================================================
+// 기여도 기반 경험치 분배
+// ================================================================
+
+void GameServer::distributeExp(Monster* monster) {
+    auto contribCfg = lua_->getContributionConfig();
+
+    // 만료된 기여 정리 (처치 시점 기준)
+    monster->expireContributions(contribCfg.expireSec);
+
+    auto& contribs = monster->contributions;
+    if (contribs.empty()) return;  // 기여자 없음 (테스트 시나리오 등)
+
+    // 가중 기여량 계산: damage + tanking * tankingWeight
+    float totalWeighted = 0.f;
+    std::vector<LuaEngine::ContributionEntry> entries;
+    for (auto& [pid, c] : contribs) {
+        float weighted = (float)c.damage + (float)c.tanking * contribCfg.tankingWeight;
+        totalWeighted += weighted;
+        entries.push_back({pid, c.damage, c.tanking, 0.f});
+    }
+
+    // 비율 계산
+    if (totalWeighted > 0.f) {
+        for (auto& e : entries) {
+            float weighted = (float)e.damage + (float)e.tanking * contribCfg.tankingWeight;
+            e.ratio = weighted / totalWeighted;
+        }
+    } else {
+        // 기여량 0 (이론상 불가하지만 안전 처리)
+        float equal = 1.0f / (float)entries.size();
+        for (auto& e : entries) e.ratio = equal;
+    }
+
+    // 기본 경험치 계산 (첫 번째 기여자 기준 — expReward는 몬스터 의존이므로 누가 호출해도 동일)
+    Player* anyPlayer = getPlayer(entries[0].playerId);
+    if (!anyPlayer) return;
+    int totalExp = lua_->getExpReward(anyPlayer, monster);
+
+    // Lua 분배 호출
+    auto shares = lua_->getExpDistribute(totalExp, entries, contribCfg);
+
+    // 각 플레이어에게 EXP 지급
+    for (auto& share : shares) {
+        Player* p = getPlayer(share.playerId);
+        if (!p) continue;
+        grantExpAndLevelUp(p, share.exp);
+
+        std::cout << "[GameServer] Player '" << p->name
+                  << "' gained " << share.exp << " EXP from "
+                  << monster->name << " (contribution-based, total=" << p->exp << ")\n";
+    }
+
+    // 분배 이벤트 브로드캐스트
+    json expEvent;
+    expEvent["type"] = "exp_distribute";
+    expEvent["monsterId"] = monster->id;
+    json shareList = json::array();
+    for (auto& share : shares) {
+        Player* p = getPlayer(share.playerId);
+        shareList.push_back({
+            {"playerId", share.playerId},
+            {"name", p ? p->name : "?"},
+            {"exp", share.exp}
+        });
+    }
+    expEvent["shares"] = shareList;
+    broadcastEvent(expEvent.dump());
+
+    monster->clearContributions();
+}
+
+void GameServer::grantExpAndLevelUp(Player* player, int expGain) {
+    player->exp += expGain;
+
+    int needed = lua_->getExpToLevel(player->level);
+    while (player->exp >= needed) {
+        player->exp -= needed;
+        player->level++;
+        applyClassStats(player, *lua_);
+        player->hp = player->maxHp;
+        std::cout << "[GameServer] Player '" << player->name
+                  << "' leveled up to " << player->level
+                  << "! maxHp=" << player->maxHp << "\n";
+        auto lvEvent = json{
+            {"type",     "player_levelup"},
+            {"playerId", player->id},
+            {"level",    player->level},
+            {"maxHp",    player->maxHp}
+        }.dump();
+        broadcastEvent(lvEvent);
+        needed = lua_->getExpToLevel(player->level);
+    }
 }
 
 // ================================================================

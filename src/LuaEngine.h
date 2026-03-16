@@ -53,6 +53,29 @@ public:
     };
     DeathPenalty getDeathPenalty(Player* player);
 
+    // 기여도 기반 경험치 분배 (RELOAD formula 핫픽스 가능)
+    struct ContributionConfig {
+        float expireSec     = 30.0f;  // 기여도 만료 시간 (초)
+        float tankingWeight = 0.5f;   // 탱킹→데미지 환산 가중치
+        float minShareRatio = 0.10f;  // 최소 경험치 비율
+        std::map<int, float> partyBonus = {{1, 1.0f}, {2, 1.2f}, {3, 1.4f}, {4, 1.5f}};
+    };
+    ContributionConfig getContributionConfig();
+
+    struct ContributionEntry {
+        int   playerId;
+        int   damage;
+        int   tanking;
+        float ratio;  // 가중 기여 비율 (0~1)
+    };
+    struct ExpShareResult {
+        int playerId;
+        int exp;
+    };
+    std::vector<ExpShareResult> getExpDistribute(int totalExp,
+                                                  const std::vector<ContributionEntry>& entries,
+                                                  const ContributionConfig& config);
+
     // P1: 스폰·리스폰·AI 설정 (RELOAD formula 핫픽스 가능)
     struct SpawnEntry {
         int         id;

@@ -247,6 +247,97 @@ LuaEngine::DeathPenalty LuaEngine::getDeathPenalty(Player* p) {
 }
 
 // ================================================================
+// 기여도 기반 경험치 분배
+// ================================================================
+
+LuaEngine::ContributionConfig LuaEngine::getContributionConfig() {
+    ContributionConfig def;
+    sol::protected_function f = lua["formula"]["getContributionConfig"];
+    if (!f.valid()) return def;
+    auto res = f();
+    if (!res.valid()) {
+        sol::error e = res;
+        std::cerr << "[LuaEngine] formula.getContributionConfig: " << e.what() << "\n";
+        return def;
+    }
+    sol::table t = res;
+    def.expireSec     = t.get_or<float>("expireSec",     def.expireSec);
+    def.tankingWeight = t.get_or<float>("tankingWeight",  def.tankingWeight);
+    def.minShareRatio = t.get_or<float>("minShareRatio",  def.minShareRatio);
+
+    sol::optional<sol::table> bonusOpt = t["partyBonus"];
+    if (bonusOpt) {
+        def.partyBonus.clear();
+        sol::table bt = *bonusOpt;
+        for (auto& kv : bt) {
+            int key = kv.first.as<int>();
+            float val = kv.second.as<float>();
+            def.partyBonus[key] = val;
+        }
+    }
+    return def;
+}
+
+std::vector<LuaEngine::ExpShareResult> LuaEngine::getExpDistribute(
+    int totalExp,
+    const std::vector<ContributionEntry>& entries,
+    const ContributionConfig& config)
+{
+    std::vector<ExpShareResult> fallback;
+
+    sol::protected_function f = lua["formula"]["expDistribute"];
+    if (!f.valid()) {
+        // fallback: 균등 분배
+        int share = entries.empty() ? 0 : totalExp / (int)entries.size();
+        for (auto& e : entries)
+            fallback.push_back({e.playerId, std::max(1, share)});
+        return fallback;
+    }
+
+    // contributions 테이블 생성
+    sol::table contribs = lua.create_table();
+    for (size_t i = 0; i < entries.size(); ++i) {
+        sol::table entry = lua.create_table();
+        entry["playerId"] = entries[i].playerId;
+        entry["damage"]   = entries[i].damage;
+        entry["tanking"]  = entries[i].tanking;
+        entry["ratio"]    = entries[i].ratio;
+        contribs[i + 1]   = entry;
+    }
+
+    // config 테이블 생성
+    sol::table cfgTable = lua.create_table();
+    cfgTable["expireSec"]     = config.expireSec;
+    cfgTable["tankingWeight"] = config.tankingWeight;
+    cfgTable["minShareRatio"] = config.minShareRatio;
+    sol::table bonusTable = lua.create_table();
+    for (auto& [k, v] : config.partyBonus)
+        bonusTable[k] = v;
+    cfgTable["partyBonus"] = bonusTable;
+
+    auto res = f(totalExp, contribs, cfgTable);
+    if (!res.valid()) {
+        sol::error e = res;
+        std::cerr << "[LuaEngine] formula.expDistribute: " << e.what() << "\n";
+        int share = entries.empty() ? 0 : totalExp / (int)entries.size();
+        for (auto& e : entries)
+            fallback.push_back({e.playerId, std::max(1, share)});
+        return fallback;
+    }
+
+    sol::table result = res;
+    std::vector<ExpShareResult> out;
+    for (size_t i = 1; i <= result.size(); ++i) {
+        sol::table row = result[i];
+        out.push_back({
+            row.get_or("playerId", 0),
+            row.get_or("exp", 1)
+        });
+    }
+    return out;
+}
+
+// ================================================================
 // P1: 스폰·리스폰·AI 설정
 // ================================================================
 

@@ -52,12 +52,81 @@ end
 --------------------------------------------------------------------------------
 -- @param player  Player userdata
 -- @return { resetLevel, resetExp }
---   음수(-1)이면 해당 값 유지
+--   resetLevel 음수(-1)이면 레벨 유지
 function formula.deathPenalty(player)
+    local newLevel = math.max(1, math.ceil(player.level / 2))  -- 레벨 절반 (올림, 최소 1)
     return {
-        resetLevel = 1,
+        resetLevel = newLevel,
         resetExp   = 0,
     }
+end
+
+-- ============================================================================
+-- P0.5: 공격 기여도 · 경험치 분배
+-- ============================================================================
+
+--------------------------------------------------------------------------------
+-- 6. 기여도 설정
+--------------------------------------------------------------------------------
+-- @return { expireSec, tankingWeight, minShareRatio, partyBonus }
+function formula.getContributionConfig()
+    return {
+        expireSec      = 30.0,  -- 기여도 만료 시간 (초). 이 시간 내 공격/탱킹 없으면 기여 소멸
+        tankingWeight  = 0.5,   -- 탱킹 기여를 데미지 환산할 때의 가중치 (흡수 1 = 데미지 0.5)
+        minShareRatio  = 0.10,  -- 참여자 최소 경험치 비율 (10%)
+        partyBonus     = {      -- 참여 인원에 따른 총 EXP 배율
+            [1] = 1.0,
+            [2] = 1.2,
+            [3] = 1.4,
+            [4] = 1.5,          -- 4인 이상 동일
+        },
+    }
+end
+
+--------------------------------------------------------------------------------
+-- 7. 경험치 분배
+--------------------------------------------------------------------------------
+-- C++ 에서 기여도 비율을 계산하여 contributions 배열로 넘겨준다.
+-- @param totalExp       int    몬스터 처치 기본 경험치 (formula.expReward 결과)
+-- @param contributions  array  { {playerId, damage, tanking, ratio}, ... }
+-- @param config         table  getContributionConfig() 결과
+-- @return array of { playerId, exp }
+function formula.expDistribute(totalExp, contributions, config)
+    local numPlayers = #contributions
+    if numPlayers == 0 then return {} end
+
+    -- 참여 인원 보너스 배율
+    local bonusTable = config.partyBonus or {}
+    local bonus = bonusTable[numPlayers] or bonusTable[4] or 1.5
+    if numPlayers > 4 then bonus = bonusTable[4] or 1.5 end
+    local boostedExp = math.floor(totalExp * bonus)
+
+    local minShare = config.minShareRatio or 0.10
+    local result = {}
+
+    if numPlayers == 1 then
+        -- 솔로: 보너스 없이 전체 지급
+        table.insert(result, {
+            playerId = contributions[1].playerId,
+            exp = totalExp,
+        })
+        return result
+    end
+
+    -- 최소 보장 비율 적용: 각 기여자에게 minShare 보장 후 나머지를 비율 분배
+    local reservedRatio = minShare * numPlayers
+    local poolRatio     = math.max(0, 1.0 - reservedRatio)
+
+    for _, c in ipairs(contributions) do
+        local share = minShare + poolRatio * c.ratio
+        local expGain = math.floor(boostedExp * share)
+        table.insert(result, {
+            playerId = c.playerId,
+            exp = math.max(1, expGain),  -- 최소 1 보장
+        })
+    end
+
+    return result
 end
 
 -- ============================================================================
@@ -65,7 +134,7 @@ end
 -- ============================================================================
 
 --------------------------------------------------------------------------------
--- 6. 초기 몬스터 스폰 테이블
+-- 8. 초기 몬스터 스폰 테이블
 --------------------------------------------------------------------------------
 -- 서버 시작 시 1회 호출. RELOAD formula 후 다음 서버 시작 시 반영.
 -- @return array of { id, name, level, x, y }
@@ -78,7 +147,7 @@ function formula.getSpawnTable()
 end
 
 --------------------------------------------------------------------------------
--- 7. 리스폰 설정
+-- 9. 리스폰 설정
 --------------------------------------------------------------------------------
 -- @return { minMs, maxMs, warningMs, eliteChance, splitChance }
 function formula.getRespawnConfig()
@@ -94,7 +163,7 @@ function formula.getRespawnConfig()
 end
 
 --------------------------------------------------------------------------------
--- 8. 리스폰 시 레벨 변동
+-- 10. 리스폰 시 레벨 변동
 --------------------------------------------------------------------------------
 -- @param baseLevel  int  원래 레벨
 -- @param currentLevel  int  현재 레벨
@@ -114,7 +183,7 @@ function formula.respawnLevel(baseLevel, currentLevel)
 end
 
 --------------------------------------------------------------------------------
--- 9. 몬스터 기본 스탯 (HP / 코인)
+-- 11. 몬스터 기본 스탯 (HP / 코인)
 --------------------------------------------------------------------------------
 -- @param level    int   몬스터 레벨
 -- @param isElite  bool  엘리트 여부
@@ -130,7 +199,7 @@ function formula.monsterBaseStats(level, isElite)
 end
 
 --------------------------------------------------------------------------------
--- 10. 몬스터 AI 파라미터
+-- 12. 몬스터 AI 파라미터
 --------------------------------------------------------------------------------
 -- @param monster  Monster userdata
 -- @return { aggroSpeed, attackSpeed }
@@ -146,7 +215,7 @@ end
 -- ============================================================================
 
 --------------------------------------------------------------------------------
--- 11. 맵 설정
+-- 13. 맵 설정
 --------------------------------------------------------------------------------
 -- @return { width, height }
 function formula.getMapConfig()
@@ -157,7 +226,7 @@ function formula.getMapConfig()
 end
 
 --------------------------------------------------------------------------------
--- 12. HP 자동 회복
+-- 14. HP 자동 회복
 --------------------------------------------------------------------------------
 -- @return { intervalSec }
 function formula.getRegenConfig()
@@ -167,7 +236,7 @@ function formula.getRegenConfig()
 end
 
 --------------------------------------------------------------------------------
--- 13. 게임 루프
+-- 15. 게임 루프
 --------------------------------------------------------------------------------
 -- @return { tickMs }
 function formula.getTickConfig()

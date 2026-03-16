@@ -106,4 +106,6 @@ private:
     bool doRespawn(Monster* m);                 // 리스폰 처리, 분열 여부 반환
     void sendRespawnWarning(Monster* m);        // 리스폰 예고 브로드캐스트
     void splitSpawn(Monster* parent);           // 군집 분열: 자식 몬스터 생성
+    void distributeExp(Monster* monster);      // 기여도 기반 경험치 분배
+    void grantExpAndLevelUp(Player* player, int expGain);  // EXP 지급 + 레벨업 처리
 };

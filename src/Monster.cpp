@@ -16,3 +16,31 @@ void Monster::takeDamage(int dmg) {
     std::cout << "[Monster:" << name << "] took " << dmg
               << " dmg, hp=" << hp << "\n";
 }
+
+void Monster::addDamageContribution(int playerId, int damage) {
+    auto& c = contributions[playerId];
+    c.damage += damage;
+    c.lastTime = std::chrono::steady_clock::now();
+}
+
+void Monster::addTankingContribution(int playerId, int damage) {
+    auto& c = contributions[playerId];
+    c.tanking += damage;
+    c.lastTime = std::chrono::steady_clock::now();
+}
+
+void Monster::expireContributions(float expireSec) {
+    auto now = std::chrono::steady_clock::now();
+    for (auto it = contributions.begin(); it != contributions.end(); ) {
+        float elapsed = std::chrono::duration<float>(now - it->second.lastTime).count();
+        if (elapsed >= expireSec) {
+            it = contributions.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void Monster::clearContributions() {
+    contributions.clear();
+}
