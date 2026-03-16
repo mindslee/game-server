@@ -1,0 +1,1188 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GameServer Client</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0d1117; --surface: #161b22; --surface2: #21262d;
+  --border: #30363d; --accent: #58a6ff; --green: #3fb950;
+  --red: #f85149; --orange: #d29922; --text: #c9d1d9; --muted: #8b949e;
+}
+body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; height: 100vh; overflow: hidden; }
+
+/* ── Login Screen ─────────────────────────────────────── */
+#loginScreen {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: radial-gradient(ellipse at center, #1a1f2e 0%, #0d1117 70%);
+}
+.logo-wrap { text-align: center; margin-bottom: 40px; }
+.logo-icon { font-size: 5rem; line-height: 1; filter: drop-shadow(0 0 30px #58a6ff88); animation: pulse 2s infinite; }
+.logo-title { font-size: 2rem; font-weight: 800; letter-spacing: 0.15em;
+  background: linear-gradient(135deg, #58a6ff, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.logo-sub { color: var(--muted); font-size: 0.8rem; margin-top: 6px; letter-spacing: 0.1em; }
+@keyframes pulse { 0%,100%{filter:drop-shadow(0 0 20px #58a6ff66)} 50%{filter:drop-shadow(0 0 40px #58a6ffcc)} }
+
+.login-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  padding: 32px 36px; min-width: 340px;
+  box-shadow: 0 0 60px #58a6ff18;
+}
+.login-card h2 { font-size: 1rem; color: var(--muted); margin-bottom: 20px; text-align: center; }
+.field { display: flex; flex-direction: column; margin-bottom: 14px; }
+.field label { font-size: 0.75rem; color: var(--muted); margin-bottom: 5px; letter-spacing: 0.05em; }
+.field input {
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); padding: 9px 12px; font-size: 0.9rem; outline: none;
+  transition: border-color 0.2s;
+}
+.field input:focus { border-color: var(--accent); }
+.field-row { display: flex; gap: 10px; }
+.field-row .field { flex: 1; }
+/* Job selector */
+.job-row { display: flex; gap: 8px; margin-top: 2px; }
+.job-btn {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 10px 6px; border: 1px solid var(--border); border-radius: 8px;
+  cursor: pointer; transition: all 0.2s; background: var(--surface2); text-align: center;
+  user-select: none;
+}
+.job-btn:has(input:checked) { border-color: var(--accent); background: rgba(88,166,255,0.12); }
+.job-btn input { display: none; }
+.job-btn .job-icon { font-size: 1.4rem; }
+.job-btn .job-name { font-size: 0.88rem; font-weight: 700; }
+.job-btn .job-desc { font-size: 0.65rem; color: var(--muted); line-height: 1.4; }
+
+.btn-connect {
+  width: 100%; padding: 12px; margin-top: 8px;
+  background: linear-gradient(135deg, #58a6ff, #a78bfa); border: none; border-radius: 8px;
+  color: #fff; font-size: 0.95rem; font-weight: 700; cursor: pointer;
+  letter-spacing: 0.05em; transition: opacity 0.2s;
+}
+.btn-connect:hover { opacity: 0.85; }
+#loginError { color: var(--red); font-size: 0.8rem; margin-top: 8px; text-align: center; min-height: 1.2em; }
+
+/* ── Game Screen ──────────────────────────────────────── */
+#gameScreen { display: none; flex-direction: column; height: 100vh; }
+#gameScreen.visible { display: flex; }
+
+header {
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 14px; padding: 0 16px; height: 52px; flex-shrink: 0;
+}
+header .h-logo { font-size: 1.4rem; }
+header .h-title { font-weight: 700; font-size: 0.95rem; color: var(--accent); }
+header .h-status { margin-left: auto; display: flex; gap: 12px; align-items: center; font-size: 0.8rem; color: var(--muted); }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px var(--green); }
+.status-dot.off { background: var(--red); box-shadow: none; }
+.h-pinfo { display: flex; gap: 10px; }
+.h-chip { background: var(--surface2); border: 1px solid var(--border); border-radius: 20px; padding: 2px 10px; font-size: 0.78rem; }
+
+main { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Canvas ───────────────────────────────────────────── */
+#mapWrap {
+  flex: 1; position: relative; background: #0a0f0a; overflow: hidden; cursor: crosshair;
+}
+#mapCanvas { position: absolute; top: 0; left: 0; }
+.map-hint {
+  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+  font-size: 0.7rem; color: rgba(255,255,255,0.3); pointer-events: none; white-space: nowrap;
+}
+#coordLabel {
+  position: absolute; top: 10px; left: 10px; font-size: 0.75rem;
+  color: rgba(255,255,255,0.5); pointer-events: none; font-family: monospace;
+}
+
+/* ── Sidebar ──────────────────────────────────────────── */
+#sidebar {
+  width: 280px; flex-shrink: 0; background: var(--surface); border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.panel { border-bottom: 1px solid var(--border); padding: 12px 14px; }
+.panel-title { font-size: 0.65rem; font-weight: 700; letter-spacing: 0.1em; color: var(--accent); margin-bottom: 8px; text-transform: uppercase; }
+
+/* Player card */
+.stat-row { display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 4px; }
+.stat-label { color: var(--muted); }
+.hp-bar { height: 5px; background: var(--surface2); border-radius: 3px; margin: 5px 0; }
+.hp-fill  { height: 100%; background: var(--green);  border-radius: 3px; transition: width 0.3s; }
+.exp-fill { height: 100%; background: #a78bfa;        border-radius: 3px; transition: width 0.5s; }
+
+/* Death overlay */
+#deathOverlay {
+  position: fixed; inset: 0; z-index: 50;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(248,81,73,0.18); pointer-events: none;
+}
+#deathOverlay.visible { display: flex; }
+.death-box {
+  text-align: center; padding: 32px 48px;
+  background: rgba(13,17,23,0.85); border: 1px solid var(--red);
+  border-radius: 16px; box-shadow: 0 0 40px #f8514944;
+}
+.death-title { font-size: 3rem; color: var(--red); font-weight: 800;
+  text-shadow: 0 0 20px #f85149; animation: deathPulse 0.7s infinite alternate; }
+.death-sub { color: rgba(255,255,255,0.6); font-size: 0.9rem; margin-top: 10px; }
+.death-killer { color: var(--red); font-size: 1rem; margin-top: 6px; }
+@keyframes deathPulse {
+  from { text-shadow: 0 0 10px #f85149; }
+  to   { text-shadow: 0 0 30px #f85149, 0 0 60px #f8514966; }
+}
+
+/* Target card */
+#targetPanel { display: none; }
+#targetPanel.visible { display: block; }
+.target-name { font-size: 0.9rem; font-weight: 700; margin-bottom: 6px; }
+.target-dist { font-size: 0.75rem; color: var(--muted); }
+.dist-inrange { color: var(--green); font-weight: 600; }
+.dist-outrange { color: var(--red); }
+.btn-attack {
+  margin-top: 8px; width: 100%; padding: 7px; border-radius: 6px;
+  font-size: 0.82rem; font-weight: 700; border: none; cursor: pointer;
+  background: var(--red); color: #fff; transition: opacity 0.2s;
+}
+.btn-attack:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Commands */
+.cmd-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; }
+.cmd-label { font-size: 0.72rem; color: var(--muted); min-width: 38px; }
+.cmd-input {
+  flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: 5px;
+  color: var(--text); padding: 4px 7px; font-size: 0.78rem; outline: none;
+}
+.cmd-input:focus { border-color: var(--accent); }
+select.cmd-input { cursor: pointer; }
+.btn-sm {
+  padding: 4px 9px; border-radius: 5px; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text); font-size: 0.75rem; cursor: pointer;
+  white-space: nowrap; transition: background 0.15s;
+}
+.btn-sm:hover { background: var(--border); }
+.btn-sm.primary { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 700; }
+.btn-sm.primary:hover { opacity: 0.85; }
+
+/* Log */
+#logPanel { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 10px 14px; }
+#logPanel .panel-title { flex-shrink: 0; }
+#logList {
+  flex: 1; overflow-y: auto; font-size: 0.75rem; font-family: monospace;
+  line-height: 1.6; scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+}
+#logList::-webkit-scrollbar { width: 4px; }
+#logList::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.log-ok    { color: var(--green); }
+.log-error { color: var(--red); }
+.log-info  { color: var(--accent); }
+.log-sys   { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<!-- ── Login Screen ──────────────────────────────────── -->
+<div id="loginScreen">
+  <div class="logo-wrap">
+    <div class="logo-icon">⚔</div>
+    <div class="logo-title">GAME SERVER</div>
+    <div class="logo-sub">MMORPG Prototype · Lua Scripted</div>
+  </div>
+  <div class="login-card">
+    <h2>캐릭터 접속</h2>
+    <div class="field-row">
+      <div class="field">
+        <label>캐릭터 이름</label>
+        <input id="nameInput" placeholder="영웅" maxlength="16">
+      </div>
+      <div class="field" style="max-width:80px">
+        <label>레벨</label>
+        <input id="levelInput" type="number" value="1" min="1" max="100">
+      </div>
+    </div>
+    <div class="field">
+      <label>직업</label>
+      <div class="job-row">
+        <label class="job-btn">
+          <input type="radio" name="job" value="warrior" checked>
+          <span class="job-icon">⚔</span>
+          <span class="job-name">전사</span>
+          <span class="job-desc">근접 공격<br>높은 체력</span>
+        </label>
+        <label class="job-btn">
+          <input type="radio" name="job" value="archer">
+          <span class="job-icon">🏹</span>
+          <span class="job-name">궁수</span>
+          <span class="job-desc">원거리 25<br>체력·속도 -20%</span>
+        </label>
+      </div>
+    </div>
+    <div class="field">
+      <label>서버 주소</label>
+      <input id="serverInput" value="localhost:7001">
+    </div>
+    <button class="btn-connect" onclick="doConnect()">접속</button>
+    <div id="loginError"></div>
+  </div>
+</div>
+
+<!-- ── Game Screen ───────────────────────────────────── -->
+<div id="gameScreen">
+
+  <!-- 사망 오버레이 -->
+  <div id="deathOverlay">
+    <div class="death-box">
+      <div class="death-title">💀 사망</div>
+      <div id="deathKiller" class="death-killer"></div>
+      <div class="death-sub">레벨 1로 리스폰됩니다...</div>
+    </div>
+  </div>
+
+  <header>
+    <span class="h-logo">⚔</span>
+    <span class="h-title">GAME SERVER</span>
+    <div class="h-status">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText">연결 중...</span>
+      <div class="h-pinfo" id="headerInfo"></div>
+    </div>
+  </header>
+  <main>
+    <div id="mapWrap">
+      <canvas id="mapCanvas"></canvas>
+      <div class="map-hint">클릭: 이동/몬스터선택 &nbsp;|&nbsp; 몬스터 선택 시 자동 추적+공격 &nbsp;|&nbsp; A: 자동공격 &nbsp;|&nbsp; 우클릭: 수동공격 &nbsp;|&nbsp; Esc: 선택해제 &nbsp;|&nbsp; 휠: 줌 &nbsp;|&nbsp; 드래그: 팬</div>
+      <div id="coordLabel">-</div>
+    </div>
+    <div id="sidebar">
+
+      <!-- Player -->
+      <div class="panel" id="playerPanel">
+        <div class="panel-title">플레이어</div>
+        <div id="playerInfo"><span style="color:var(--muted);font-size:.8rem">접속 후 표시됩니다</span></div>
+      </div>
+
+      <!-- Target -->
+      <div class="panel" id="targetPanel">
+        <div class="panel-title">선택 대상</div>
+        <div id="targetInfo"></div>
+      </div>
+
+      <!-- Commands -->
+      <div class="panel">
+        <div class="panel-title">명령</div>
+        <!-- Auto-attack toggle -->
+        <div class="cmd-row">
+          <span class="cmd-label">자동공격</span>
+          <button id="btnAutoAtk" class="btn-sm" onclick="toggleAutoAttack()">OFF [A]</button>
+        </div>
+        <!-- Buff -->
+        <div class="cmd-row">
+          <span class="cmd-label">버프</span>
+          <select id="buffAction" class="cmd-input" style="max-width:70px">
+            <option value="add">ADD</option>
+            <option value="remove">REM</option>
+          </select>
+          <input id="buffId" class="cmd-input" type="number" value="1000" style="max-width:70px">
+          <button class="btn-sm primary" onclick="sendBuff()">GO</button>
+        </div>
+        <!-- Item -->
+        <div class="cmd-row">
+          <span class="cmd-label">아이템</span>
+          <input id="itemId" class="cmd-input" type="number" value="1000">
+          <button class="btn-sm primary" onclick="sendItem()">USE</button>
+        </div>
+        <!-- Quest -->
+        <div class="cmd-row">
+          <span class="cmd-label">퀘스트</span>
+          <select id="questAction" class="cmd-input" style="max-width:70px">
+            <option value="accept">ACC</option>
+            <option value="complete">CMP</option>
+            <option value="remove">REM</option>
+          </select>
+          <input id="questId" class="cmd-input" type="number" value="1000" style="max-width:70px">
+          <button class="btn-sm primary" onclick="sendQuest()">GO</button>
+        </div>
+        <!-- Reload -->
+        <div class="cmd-row">
+          <span class="cmd-label">리로드</span>
+          <input id="reloadMod" class="cmd-input" value="buff.1000">
+          <button class="btn-sm" onclick="sendReload()">GO</button>
+        </div>
+        <!-- Manual -->
+        <div class="cmd-row" style="margin-top:6px">
+          <input id="manualCmd" class="cmd-input" placeholder="JSON 명령 직접 입력" style="font-size:.7rem">
+          <button class="btn-sm" onclick="sendManual()">↵</button>
+        </div>
+      </div>
+
+      <!-- Log -->
+      <div id="logPanel">
+        <div class="panel-title">로그</div>
+        <div id="logList"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ──────────────────────────────────────────────────────────────────
+// State
+// ──────────────────────────────────────────────────────────────────
+let ws = null;
+let gameState = { player: null, monsters: [], players: [] };
+let selectedMonster = null;
+
+// 자동공격 — ON이면 가장 가까운 몬스터를 자동 선택, 선택된 몬스터는 항상 추적+공격
+let autoAttack   = false;
+let lastAttackMs = 0;
+let lastChaseMoveMs = 0;         // 이동 명령 스로틀용
+const CHASE_MOVE_INTERVAL = 300; // ms
+let chaseInRange = false;        // 사거리 진입 감지 (정지 명령 1회 전송용)
+let manualMoveTarget = null;     // {x,y} 수동 이동 목적지 — 도착 전까지 자동타겟 억제
+const attackEffects = [];        // [{fromX,fromY,toX,toY,expiresAt,crit,fromMonster}]
+
+// 리스폰 예고: id → {x, y, name, expiresAt}
+const respawnWarnings = new Map();
+
+// ──────────────────────────────────────────────────────────────────
+// Client-side interpolation
+// ──────────────────────────────────────────────────────────────────
+// renderPos: key ('p<id>' or 'm<id>') → {x, y}  (visual position)
+const renderPos = new Map();
+let lastRafTs = null;
+
+function getRenderPos(key, snapX, snapY) {
+  if (!renderPos.has(key)) renderPos.set(key, { x: snapX, y: snapY });
+  return renderPos.get(key);
+}
+
+function stepRenderPos(rp, tx, ty, speed, dt) {
+  const dx = tx - rp.x, dy = ty - rp.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 0.001) return;
+  const move = speed * dt;
+  if (move >= dist) { rp.x = tx; rp.y = ty; }
+  else { const inv = move / dist; rp.x += dx * inv; rp.y += dy * inv; }
+}
+
+function gameLoop(ts) {
+  requestAnimationFrame(gameLoop);
+  const dt = lastRafTs ? Math.min((ts - lastRafTs) / 1000, 0.1) : 0;
+  lastRafTs = ts;
+
+  const p = gameState.player;
+  if (p) {
+    const rp = getRenderPos('p' + p.id, p.x, p.y);
+    if (Math.hypot(p.x - rp.x, p.y - rp.y) > 5) { rp.x = p.x; rp.y = p.y; }
+    stepRenderPos(rp, p.tx ?? p.x, p.ty ?? p.y, p.speed ?? 15, dt);
+  }
+  for (const m of gameState.monsters) {
+    const rp = getRenderPos('m' + m.id, m.x, m.y);
+    if (Math.hypot(m.x - rp.x, m.y - rp.y) > 5) { rp.x = m.x; rp.y = m.y; }
+    stepRenderPos(rp, m.tx ?? m.x, m.ty ?? m.y, m.speed ?? 0, dt);
+  }
+  for (const pl of gameState.players) {
+    const rp = getRenderPos('p' + pl.id, pl.x, pl.y);
+    if (Math.hypot(pl.x - rp.x, pl.y - rp.y) > 5) { rp.x = pl.x; rp.y = pl.y; }
+    stepRenderPos(rp, pl.tx ?? pl.x, pl.ty ?? pl.y, pl.speed ?? 15, dt);
+  }
+
+  // ── 플레이어 간 시각적 분리 (renderPos만 보정, 서버 위치 무관) ────
+  {
+    const SEP_MIN = 3.0, SEP_K = 0.12;
+    const _rps = [];
+    if (p) _rps.push(getRenderPos('p' + p.id, p.x, p.y));
+    for (const pl of gameState.players) _rps.push(getRenderPos('p' + pl.id, pl.x, pl.y));
+    for (let i = 0; i < _rps.length; i++) {
+      for (let j = i + 1; j < _rps.length; j++) {
+        const a = _rps[i], b = _rps[j];
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const d = Math.hypot(dx, dy);
+        if (d < SEP_MIN && d > 0.001) {
+          const push = (SEP_MIN - d) * SEP_K;
+          const nx = dx / d, ny = dy / d;
+          a.x += nx * push; a.y += ny * push;
+          b.x -= nx * push; b.y -= ny * push;
+        }
+      }
+    }
+  }
+
+  // ── 수동 이동 도착 감지 ─────────────────────────────────────────
+  if (manualMoveTarget && p) {
+    const dist = Math.hypot(p.x - manualMoveTarget.x, p.y - manualMoveTarget.y);
+    if (dist < 1.0) manualMoveTarget = null;  // 목적지 도착 → 자동타겟 재개
+  }
+
+  // ── 자동공격 ON: 타겟 없고 수동 이동 완료 시 가장 가까운 몬스터 자동 선택 ──
+  if (autoAttack && !selectedMonster && !manualMoveTarget && p) {
+    let nearest = null, minD = Infinity;
+    for (const m of gameState.monsters) {
+      if (!m.alive) continue;
+      const d = Math.hypot(p.x - m.x, p.y - m.y);
+      if (d < minD) { minD = d; nearest = m; }
+    }
+    if (nearest) {
+      selectedMonster = nearest;
+      chaseInRange = false;
+      log('sys', `[자동] 타겟 → ${nearest.name}`);
+      updateTargetPanel();
+    }
+  }
+
+  // ── 선택된 몬스터 추적+공격 ─────────────────────────────────────
+  if (selectedMonster && p) {
+    const fresh = gameState.monsters.find(m => m.id === selectedMonster.id);
+    if (!fresh || !fresh.alive) {
+      selectedMonster = null;
+      chaseInRange = false;
+      updateTargetPanel();
+    } else {
+      selectedMonster = fresh;
+      const dist  = Math.hypot(p.x - fresh.x, p.y - fresh.y);
+      const range = p.attackRange ?? 5.0;
+      if (dist > range) {
+        // 사거리 밖 → 몬스터 방향으로 이동
+        chaseInRange = false;
+        if (Date.now() - lastChaseMoveMs >= CHASE_MOVE_INTERVAL) {
+          lastChaseMoveMs = Date.now();
+          const dest = calcChaseDestination(p.x, p.y, fresh.x, fresh.y, range * 0.8);
+          send({ cmd: 'move', x: dest.x, y: dest.y });
+        }
+      } else {
+        // 사거리 진입 시 1회 정지 명령 → 서버 측 이동 취소
+        if (!chaseInRange) {
+          chaseInRange = true;
+          send({ cmd: 'move', x: +p.x.toFixed(1), y: +p.y.toFixed(1) });
+        }
+        // 공격 쿨다운
+        const cooldownMs = 1000 / (p.attackSpeed ?? 1.0);
+        if (Date.now() - lastAttackMs >= cooldownMs) {
+          send({ cmd: 'attack', monsterId: selectedMonster.id, damage: 10 });
+          lastAttackMs = Date.now();
+        }
+      }
+    }
+  }
+
+  render();
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Camera (zoom & pan)
+// ──────────────────────────────────────────────────────────────────
+let zoom = 5, panX = 0, panY = 0;
+let dragging = false, dragLast = null;
+const MAP_SIZE = 100;
+
+// World (0..100) ↔ Canvas pixel
+function w2s(wx, wy) {
+  const cx = canvas.width / 2, cy = canvas.height / 2;
+  return [panX + cx + (wx - 50) * zoom, panY + cy + (wy - 50) * zoom];
+}
+function s2w(sx, sy) {
+  const cx = canvas.width / 2, cy = canvas.height / 2;
+  return [(sx - panX - cx) / zoom + 50, (sy - panY - cy) / zoom + 50];
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Connection
+// ──────────────────────────────────────────────────────────────────
+function doConnect() {
+  const name   = document.getElementById('nameInput').value.trim();
+  const level  = parseInt(document.getElementById('levelInput').value) || 1;
+  const server = document.getElementById('serverInput').value.trim();
+  const job    = document.querySelector('input[name="job"]:checked')?.value ?? 'warrior';
+  if (!name) { setLoginError('이름을 입력하세요'); return; }
+
+  setLoginError('연결 중...');
+  ws = new WebSocket(`ws://${server}/ws`);
+
+  ws.onopen = () => {
+    send({ cmd: 'connect', name, level, job });
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('gameScreen').classList.add('visible');
+    initCanvas();
+    setConnected(true);
+    log('sys', `접속 완료 — ${name} (lv ${level})`);
+  };
+  ws.onmessage = e => {
+    try { handleMsg(JSON.parse(e.data)); }
+    catch(ex) { console.error(ex); }
+  };
+  ws.onclose = () => {
+    setConnected(false);
+    log('sys', '서버 연결이 끊어졌습니다');
+  };
+  ws.onerror = () => setLoginError('연결 실패 — 서버 주소를 확인하세요');
+}
+
+function setLoginError(msg) { document.getElementById('loginError').textContent = msg; }
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+function setConnected(on) {
+  document.getElementById('statusDot').className = 'status-dot' + (on ? '' : ' off');
+  document.getElementById('statusText').textContent = on ? '연결됨' : '연결 끊김';
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Message handling
+// ──────────────────────────────────────────────────────────────────
+let _lastOwnState = null;  // track if state came from our own action
+
+function handleMsg(msg) {
+  if (msg.type === 'state') {
+    const prevPlayers = gameState.players ? gameState.players.length : 0;
+    gameState = msg;
+    for (const m of gameState.monsters)
+      if (m.alive) respawnWarnings.delete(m.id);
+    updateSidebar();
+    const curPlayers = gameState.players ? gameState.players.length : 0;
+    if (curPlayers !== prevPlayers) {
+      if (curPlayers > prevPlayers) log('sys', `플레이어 접속 — 현재 ${curPlayers + 1}명`);
+      else log('sys', `플레이어 퇴장 — 현재 ${curPlayers + 1}명`);
+    }
+    // 선택 타겟 동기화 + 사망 시 자동 전환
+    if (selectedMonster) {
+      const fresh = gameState.monsters.find(m => m.id === selectedMonster.id);
+      if (fresh) {
+        selectedMonster = fresh;
+        if (!fresh.alive) { selectedMonster = null; chaseInRange = false; }
+        updateTargetPanel();
+      }
+    }
+  } else if (msg.type === 'respawn_soon') {
+    respawnWarnings.set(msg.id, {
+      x: msg.x, y: msg.y, name: msg.name,
+      expiresAt: Date.now() + 3500
+    });
+    log('sys', `⚠ ${msg.name} 리스폰 예정...`);
+  } else if (msg.type === 'attack_result') {
+    // 공격 이펙트 (공격자 → 대상 선)
+    const p = gameState.player;
+    let fromRp;
+    if (p && msg.attackerId === p.id) {
+      fromRp = getRenderPos('p' + p.id, p.x, p.y);
+    } else {
+      const op = gameState.players.find(pl => pl.id === msg.attackerId);
+      if (op) fromRp = getRenderPos('p' + op.id, op.x, op.y);
+    }
+    const toRp = renderPos.get('m' + msg.targetId);
+    if (fromRp && toRp) {
+      attackEffects.push({
+        fromX: fromRp.x, fromY: fromRp.y,
+        toX: toRp.x, toY: toRp.y,
+        expiresAt: Date.now() + 400,
+        crit: msg.critical,
+        fromMonster: false
+      });
+    }
+    if (p && msg.attackerId === p.id) {
+      if (msg.critical) log('ok', `⚔ 크리티컬! ${msg.damage} 데미지`);
+      if (msg.killed)   log('ok', `☠ 처치 완료!`);
+    }
+  } else if (msg.type === 'monster_attack') {
+    const p = gameState.player;
+    if (p && msg.targetId === p.id) {
+      p.hp = msg.hp;  // 다음 state 수신 전에 UI 즉시 갱신
+      updateSidebar();
+      const fromRp = renderPos.get('m' + msg.attackerId);
+      const pRp    = getRenderPos('p' + p.id, p.x, p.y);
+      if (fromRp) {
+        attackEffects.push({
+          fromX: fromRp.x, fromY: fromRp.y,
+          toX: pRp.x, toY: pRp.y,
+          expiresAt: Date.now() + 400,
+          crit: false,
+          fromMonster: true
+        });
+      }
+      log('error', `💢 ${msg.damage} 데미지 받음! HP: ${msg.hp}/${msg.maxHp}`);
+    }
+  } else if (msg.type === 'player_levelup') {
+    const p = gameState.player;
+    if (p && msg.playerId === p.id) {
+      log('ok', `🎉 레벨업! Lv.${msg.level} (MaxHP: ${msg.maxHp})`);
+    }
+  } else if (msg.type === 'player_death') {
+    const p = gameState.player;
+    if (p && msg.playerId === p.id) {
+      document.getElementById('deathKiller').textContent = `처치자: ${msg.killedBy}`;
+      const overlay = document.getElementById('deathOverlay');
+      overlay.classList.add('visible');
+      setTimeout(() => overlay.classList.remove('visible'), 3000);
+      log('error', `☠ [${msg.killedBy}]에게 처치당함! 레벨 1로 리스폰`);
+      // 타겟 선택 초기화 (새 위치로 이동하므로)
+      selectedMonster = null;
+      chaseInRange = false;
+      manualMoveTarget = null;
+      lastAttackMs = 0;
+    }
+  } else if (msg.type === 'ok') {
+    log('ok', msg.msg);
+  } else if (msg.type === 'error') {
+    log('error', msg.msg);
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Canvas
+// ──────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('mapCanvas');
+const ctx = canvas.getContext('2d');
+
+function initCanvas() {
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+  requestAnimationFrame(gameLoop);  // 보간 렌더 루프 시작
+
+  // Mouse events
+  canvas.addEventListener('wheel', onWheel, { passive: false });
+  canvas.addEventListener('mousedown', onMouseDown);
+  canvas.addEventListener('mousemove', onMouseMove);
+  canvas.addEventListener('mouseup',   () => { dragging = false; dragMoved = false; });
+  canvas.addEventListener('mouseleave',() => dragging = false);
+  canvas.addEventListener('click', onClick);
+  canvas.addEventListener('dblclick', onDblClick);
+  canvas.addEventListener('contextmenu', e => { e.preventDefault(); onRightClick(e); });
+}
+
+function resizeCanvas() {
+  const wrap = document.getElementById('mapWrap');
+  canvas.width  = wrap.clientWidth;
+  canvas.height = wrap.clientHeight;
+  // Initial zoom: fit full map with 10% padding
+  zoom = Math.min(canvas.width, canvas.height) / MAP_SIZE * 0.85;
+  panX = panY = 0;
+  render();
+}
+
+function onWheel(e) {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const factor = e.deltaY < 0 ? 1.15 : 0.87;
+  const newZoom = Math.max(2, Math.min(60, zoom * factor));
+  // zoom around cursor
+  const [wx, wy] = s2w(mx, my);
+  zoom = newZoom;
+  // recalculate pan so wx,wy stays under cursor
+  const cx = canvas.width / 2, cy = canvas.height / 2;
+  panX = mx - cx - (wx - 50) * zoom;
+  panY = my - cy - (wy - 50) * zoom;
+  render();
+}
+
+let dragMoved = false;
+
+function onMouseDown(e) {
+  if (e.button !== 0) return;
+  dragging = true;
+  dragMoved = false;
+  dragLast = { x: e.clientX, y: e.clientY };
+}
+
+function onMouseMove(e) {
+  const rect = canvas.getBoundingClientRect();
+  const [wx, wy] = s2w(e.clientX - rect.left, e.clientY - rect.top);
+  document.getElementById('coordLabel').textContent =
+    `(${wx.toFixed(1)}, ${wy.toFixed(1)})`;
+
+  if (dragging && dragLast) {
+    const dx = e.clientX - dragLast.x;
+    const dy = e.clientY - dragLast.y;
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) dragMoved = true;
+    panX += dx;
+    panY += dy;
+    dragLast = { x: e.clientX, y: e.clientY };
+    render();
+  }
+}
+
+function onClick(e) {
+  if (dragMoved) return;  // ignore click after drag
+  const rect = canvas.getBoundingClientRect();
+  const [wx, wy] = s2w(e.clientX - rect.left, e.clientY - rect.top);
+
+  // Hit-test: monster within 2 world units in screen
+  const hitR = Math.max(1.5, 12 / zoom);
+  let hit = null, minD = Infinity;
+  for (const m of gameState.monsters) {
+    const rp = renderPos.get('m' + m.id) ?? m;
+    const d = Math.hypot(rp.x - wx, rp.y - wy);
+    if (d < hitR && d < minD) { minD = d; hit = m; }
+  }
+
+  if (hit) {
+    if (selectedMonster?.id !== hit.id) chaseInRange = false;
+    selectedMonster = hit;
+    manualMoveTarget = null;  // 몬스터 선택 시 수동 이동 취소
+    lastAttackMs = Date.now();  // 새 타겟 선택 직후 즉시 발사 방지 (1쿨다운 대기)
+    updateTargetPanel();
+  } else {
+    // 빈 곳 클릭 → 타겟 해제 + 수동 이동
+    selectedMonster = null;
+    chaseInRange = false;
+    const x = Math.max(0, Math.min(99.9, +wx.toFixed(1)));
+    const y = Math.max(0, Math.min(99.9, +wy.toFixed(1)));
+    manualMoveTarget = { x, y };  // 도착 전까지 자동타겟 억제
+    updateTargetPanel();
+    send({ cmd: 'move', x, y });
+  }
+}
+
+function onDblClick(e) {
+  if (dragMoved) return;
+  const rect = canvas.getBoundingClientRect();
+  const [wx, wy] = s2w(e.clientX - rect.left, e.clientY - rect.top);
+  const hitR = Math.max(1.5, 12 / zoom);
+  let hit = null, minD = Infinity;
+  for (const m of gameState.monsters) {
+    const rp = renderPos.get('m' + m.id) ?? m;
+    const d = Math.hypot(rp.x - wx, rp.y - wy);
+    if (d < hitR && d < minD) { minD = d; hit = m; }
+  }
+  if (hit && hit.alive) {
+    if (selectedMonster?.id !== hit.id) chaseInRange = false;
+    selectedMonster = hit;
+    manualMoveTarget = null;
+    lastAttackMs = Date.now();
+    updateTargetPanel();
+  }
+}
+
+function onRightClick(e) {
+  // Right-click on monster = attack
+  const rect = canvas.getBoundingClientRect();
+  const [wx, wy] = s2w(e.clientX - rect.left, e.clientY - rect.top);
+  const hitR = Math.max(1.5, 12 / zoom);
+  for (const m of gameState.monsters) {
+    const rp = renderPos.get('m' + m.id) ?? m;
+    if (Math.hypot(rp.x - wx, rp.y - wy) < hitR) {
+      send({ cmd: 'attack', monsterId: m.id, damage: 10 });
+      return;
+    }
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Render
+// ──────────────────────────────────────────────────────────────────
+function render() {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Map background
+  const [x0, y0] = w2s(0, 0);
+  const [x1, y1] = w2s(MAP_SIZE, MAP_SIZE);
+  ctx.fillStyle = '#0e1a0e';
+  ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+
+  // Grid (every 10 units)
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= MAP_SIZE; i += 10) {
+    const [ax, ay] = w2s(i, 0); const [bx, by] = w2s(i, MAP_SIZE);
+    const [cx2, cy2] = w2s(0, i); const [dx, dy] = w2s(MAP_SIZE, i);
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx2, cy2); ctx.lineTo(dx, dy); ctx.stroke();
+  }
+
+  // Map border
+  ctx.strokeStyle = 'rgba(88,166,255,0.3)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+
+  // Grid labels
+  if (zoom >= 4) {
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.font = `${Math.max(9, zoom * 1.2)}px monospace`;
+    ctx.textAlign = 'center';
+    for (let i = 0; i <= MAP_SIZE; i += 10) {
+      const [lx] = w2s(i, 0); ctx.fillText(i, lx, y0 - 3);
+      const [, ly] = w2s(0, i); ctx.fillText(i, x0 - 14, ly + 4);
+    }
+  }
+
+  // 리스폰 예고 원 (homePos 구역 표시)
+  const nowMs = Date.now();
+  for (const [id, w] of respawnWarnings) {
+    if (nowMs > w.expiresAt) { respawnWarnings.delete(id); continue; }
+    const age   = (w.expiresAt - nowMs) / 3500;            // 1→0 as time passes
+    const pulse = 0.4 + 0.6 * Math.abs(Math.sin(nowMs / 250));
+    const [sx, sy] = w2s(w.x, w.y);
+    // 구역 반경 원 (HOME_RADIUS = 20 units)
+    ctx.beginPath();
+    ctx.arc(sx, sy, 20 * zoom, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255,80,80,${pulse * age * 0.5})`;
+    ctx.fillStyle   = `rgba(255,80,80,${pulse * age * 0.07})`;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6 * zoom / 5, 4 * zoom / 5]);
+    ctx.stroke();
+    ctx.fill();
+    ctx.setLineDash([]);
+    // 중심 점
+    ctx.beginPath();
+    ctx.arc(sx, sy, 4, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,120,120,${pulse * age})`;
+    ctx.fill();
+    // 예고 텍스트
+    drawLabel(w.x, w.y - 3, `⚠ ${w.name}`, `rgba(255,180,180,${age})`);
+  }
+
+  // Other players
+  for (const pl of gameState.players) {
+    const rp = getRenderPos('p' + pl.id, pl.x, pl.y);
+    drawCircle(rp.x, rp.y, 1.2, '#3fb950', 0.85);
+    drawLabel(rp.x, rp.y + 2.2, pl.name, '#3fb950');
+  }
+
+  // Monsters
+  for (const m of gameState.monsters) {
+    const rp = getRenderPos('m' + m.id, m.x, m.y);
+    const isSel = selectedMonster && m.id === selectedMonster.id;
+    const hpRatio = m.alive ? m.hp / m.maxHp : 0;
+    // HP 비율에 따른 색상 (4단계: 녹색→노랑→주황→빨강)
+    const hpColor = hpRatio > 0.75 ? '#3fb950'
+                  : hpRatio > 0.5  ? '#d4a017'
+                  : hpRatio > 0.25 ? '#d29922'
+                  : '#f44336';
+    const color = !m.alive ? '#555' : isSel ? '#ff9800' : hpColor;
+    const radius = m.isElite ? 1.8 : 1.2;   // 엘리트는 더 크게
+
+    // 엘리트 광채 링
+    if (m.alive && m.isElite) {
+      const [sx, sy] = w2s(rp.x, rp.y);
+      const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 300);
+      ctx.beginPath();
+      ctx.arc(sx, sy, radius * zoom + 6, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255,215,0,${pulse * 0.7})`;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
+
+    // Chase indicator (파란 점선 링 — 선택/추적 중인 몬스터)
+    if (selectedMonster && m.id === selectedMonster.id && m.alive) {
+      const [sx, sy] = w2s(rp.x, rp.y);
+      const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 200);
+      ctx.beginPath();
+      ctx.arc(sx, sy, radius * zoom + 11, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(88,166,255,${0.35 + pulse * 0.5})`;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Selection ring
+    if (isSel) {
+      const [sx, sy] = w2s(rp.x, rp.y);
+      ctx.beginPath();
+      ctx.arc(sx, sy, radius * zoom + 5, 0, Math.PI * 2);
+      ctx.strokeStyle = '#ff9800aa';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    drawCircle(rp.x, rp.y, radius, color, m.alive ? 1 : 0.45);
+
+    if (m.alive && zoom >= 3) {
+      // HP bar (원과 동일한 4단계 색상)
+      const bw = 5, bh = 0.45;
+      const [bx, by] = w2s(rp.x - bw/2, rp.y - radius - 1.2);
+      const bwPx = bw * zoom, bhPx = bh * zoom;
+      ctx.fillStyle = '#1f2937';
+      ctx.fillRect(bx, by, bwPx, bhPx);
+      ctx.fillStyle = hpColor;
+      ctx.fillRect(bx, by, bwPx * hpRatio, bhPx);
+    }
+
+    if (zoom >= 3) {
+      const tag = m.alive ? `${m.name} [${m.hp}/${m.maxHp}]` : `${m.name} [DEAD]`;
+      drawLabel(rp.x, rp.y + radius + 1.8, tag, m.alive ? '#ffcc80' : '#888');
+    }
+  }
+
+  // Player
+  const p = gameState.player;
+  if (p) {
+    const rp = getRenderPos('p' + p.id, p.x, p.y);
+    const [px, py] = w2s(rp.x, rp.y);
+
+    // Attack range ring
+    const ar = (p.attackRange ?? 5.0) * zoom;
+    ctx.beginPath();
+    ctx.arc(px, py, ar, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(88,166,255,0.25)';
+    ctx.setLineDash([4 * zoom / 5, 4 * zoom / 5]);
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const pColor = p.job === 'archer' ? '#c084fc' : '#58a6ff';
+    drawCircle(rp.x, rp.y, 1.4, pColor, 1);
+
+    // 공격 쿨다운 arc
+    if (autoAttack) {
+      const cooldownMs = 1000 / (p.attackSpeed ?? 1.0);
+      const ratio = Math.min(1, (Date.now() - lastAttackMs) / cooldownMs);
+      const arcR  = 1.4 * zoom + 5;
+      ctx.beginPath();
+      ctx.arc(px, py, arcR, -Math.PI / 2, -Math.PI / 2 + ratio * Math.PI * 2);
+      ctx.strokeStyle = ratio >= 1 ? 'rgba(255,180,60,0.9)' : 'rgba(255,180,60,0.35)';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+    }
+
+    const pIcon = p.job === 'archer' ? '🏹' : '⚔';
+    drawLabel(rp.x, rp.y + 2.2, `${pIcon} ${p.name}`, pColor);
+  }
+
+  // ── 공격 이펙트 (선 + 크리티컬 원) ──────────────────────────────
+  const nowEff = Date.now();
+  for (let i = attackEffects.length - 1; i >= 0; i--) {
+    const eff = attackEffects[i];
+    if (nowEff > eff.expiresAt) { attackEffects.splice(i, 1); continue; }
+    const alpha = (eff.expiresAt - nowEff) / 400;
+    const [fx, fy] = w2s(eff.fromX, eff.fromY);
+    const [tx, ty] = w2s(eff.toX,   eff.toY);
+    ctx.beginPath();
+    ctx.moveTo(fx, fy);
+    ctx.lineTo(tx, ty);
+    ctx.strokeStyle = eff.fromMonster
+      ? `rgba(255,60,60,${alpha})`
+      : eff.crit ? `rgba(255,220,50,${alpha})` : `rgba(255,160,60,${alpha})`;
+    ctx.lineWidth = eff.crit ? 3 : 1.5;
+    ctx.stroke();
+    if (eff.crit) {
+      const progress = 1 - (eff.expiresAt - nowEff) / 400;
+      ctx.beginPath();
+      ctx.arc(tx, ty, 10 * progress + 4, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255,220,50,${alpha})`;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  }
+}
+
+function drawCircle(wx, wy, wr, color, alpha) {
+  const [sx, sy] = w2s(wx, wy);
+  ctx.globalAlpha = alpha;
+  ctx.beginPath();
+  ctx.arc(sx, sy, wr * zoom, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function drawLabel(wx, wy, text, color) {
+  const [sx, sy] = w2s(wx, wy);
+  const fs = Math.max(9, Math.min(14, zoom * 1.4));
+  ctx.font = `${fs}px 'Segoe UI', sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#00000088';
+  ctx.fillText(text, sx + 1, sy + 1);
+  ctx.fillStyle = color;
+  ctx.fillText(text, sx, sy);
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Sidebar
+// ──────────────────────────────────────────────────────────────────
+function updateSidebar() {
+  const p = gameState.player;
+  const el = document.getElementById('playerInfo');
+  if (!p) return;
+
+  const hpPct  = (p.hp / p.maxHp * 100).toFixed(0);
+  const expNow  = p.exp ?? 0;
+  const expNext = p.expToNext ?? (p.level * 100);
+  const expPct  = Math.min(100, (expNow / expNext) * 100).toFixed(0);
+  const jobLabel = p.job === 'archer' ? '🏹 궁수' : '⚔ 전사';
+  el.innerHTML = `
+    <div class="stat-row"><span class="stat-label">이름</span><span>${p.name}</span></div>
+    <div class="stat-row"><span class="stat-label">직업</span><span>${jobLabel}</span></div>
+    <div class="stat-row"><span class="stat-label">레벨</span><span>Lv.${p.level}</span></div>
+    <div class="stat-row"><span class="stat-label">HP</span><span>${p.hp}/${p.maxHp}</span></div>
+    <div class="hp-bar"><div class="hp-fill" style="width:${hpPct}%"></div></div>
+    <div class="stat-row" style="margin-top:4px"><span class="stat-label">경험치</span><span>${expNow}/${expNext}</span></div>
+    <div class="hp-bar"><div class="exp-fill" style="width:${expPct}%"></div></div>
+    <div class="stat-row" style="margin-top:4px"><span class="stat-label">공격력</span><span>${p.attackPower ?? 10}</span></div>
+    <div class="stat-row"><span class="stat-label">공격속도</span><span>${(p.attackSpeed ?? 1.0).toFixed(1)}/s</span></div>
+    <div class="stat-row"><span class="stat-label">사거리</span><span>${(p.attackRange ?? 5.0).toFixed(1)}</span></div>
+    <div class="stat-row"><span class="stat-label">HP재생</span><span>+${p.hpRegen ?? 0}/5s</span></div>
+    <div class="stat-row"><span class="stat-label">코인</span><span>¤${p.coin}</span></div>
+    <div class="stat-row"><span class="stat-label">위치</span><span>(${(renderPos.get('p'+p.id)?.x ?? p.x).toFixed(1)}, ${(renderPos.get('p'+p.id)?.y ?? p.y).toFixed(1)})</span></div>
+  `;
+
+  // Update header chips
+  const onlineCnt = 1 + (gameState.players ? gameState.players.length : 0);
+  document.getElementById('headerInfo').innerHTML = `
+    <span class="h-chip">${p.name} lv${p.level}</span>
+    <span class="h-chip">HP ${p.hp}/${p.maxHp}</span>
+    <span class="h-chip">¤${p.coin}</span>
+    <span class="h-chip">👤${onlineCnt}</span>
+  `;
+
+  updateTargetPanel();
+}
+
+function updateTargetPanel() {
+  const panel = document.getElementById('targetPanel');
+  const info  = document.getElementById('targetInfo');
+  const p = gameState.player;
+  if (!selectedMonster) { panel.classList.remove('visible'); return; }
+  panel.classList.add('visible');
+
+  const m = selectedMonster;
+  const dist = p ? Math.hypot(p.x - m.x, p.y - m.y) : 999;
+  const atkRange = p ? (p.attackRange ?? 5.0) : 5.0;
+  const inRange = dist <= atkRange;
+  const hpPct = m.alive ? (m.hp / m.maxHp * 100).toFixed(0) : 0;
+
+  info.innerHTML = `
+    <div class="target-name">${m.alive ? '🔴' : '💀'} ${m.name}${m.alive ? ' <span style="color:var(--accent);font-size:.75rem">🏃 추적+공격</span>' : ''}</div>
+    <div class="stat-row"><span class="stat-label">ID</span><span>${m.id}</span></div>
+    <div class="stat-row"><span class="stat-label">레벨</span><span>${m.level}</span></div>
+    <div class="stat-row"><span class="stat-label">HP</span><span>${m.hp}/${m.maxHp}</span></div>
+    <div class="hp-bar"><div class="hp-fill" style="width:${hpPct}%"></div></div>
+    <div class="stat-row"><span class="stat-label">위치</span><span>(${m.x.toFixed(1)}, ${m.y.toFixed(1)})</span></div>
+    <div class="target-dist ${inRange ? 'dist-inrange' : 'dist-outrange'}">
+      거리: ${dist.toFixed(2)} ${inRange ? '✓ 공격 가능' : `(${atkRange.toFixed(1)} 이하 필요)`}
+    </div>
+    <button class="btn-attack" ${(!m.alive || !inRange) ? 'disabled' : ''}
+      onclick="send({cmd:'attack',monsterId:${m.id},damage:10})">
+      ${!m.alive ? '처치됨' : inRange ? '⚔ 공격 (damage:10)' : '거리 초과'}
+    </button>
+  `;
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Command helpers
+// ──────────────────────────────────────────────────────────────────
+function sendBuff() {
+  const action = document.getElementById('buffAction').value;
+  const id     = parseInt(document.getElementById('buffId').value) || 1000;
+  send({ cmd: 'buff', action, buffId: id });
+}
+function sendItem() {
+  const id = parseInt(document.getElementById('itemId').value) || 1000;
+  send({ cmd: 'item', itemId: id });
+}
+function sendQuest() {
+  const action = document.getElementById('questAction').value;
+  const id     = parseInt(document.getElementById('questId').value) || 1000;
+  send({ cmd: 'quest', action, questId: id });
+}
+function sendReload() {
+  const mod = document.getElementById('reloadMod').value.trim();
+  if (mod) send({ cmd: 'reload', module: mod });
+}
+function sendManual() {
+  const raw = document.getElementById('manualCmd').value.trim();
+  if (!raw) return;
+  try {
+    const obj = JSON.parse(raw);
+    send(obj);
+    document.getElementById('manualCmd').value = '';
+  } catch { log('error', '잘못된 JSON 형식'); }
+}
+
+document.getElementById('manualCmd').addEventListener('keydown', e => {
+  if (e.key === 'Enter') sendManual();
+});
+
+// ──────────────────────────────────────────────────────────────────
+// Auto-attack
+// ──────────────────────────────────────────────────────────────────
+function toggleAutoAttack() {
+  autoAttack = !autoAttack;
+  const btn = document.getElementById('btnAutoAtk');
+  btn.textContent = autoAttack ? 'ON [A]' : 'OFF [A]';
+  btn.className   = autoAttack ? 'btn-sm primary' : 'btn-sm';
+  log('sys', `자동공격 ${autoAttack ? 'ON' : 'OFF'}`);
+}
+
+
+// ──────────────────────────────────────────────────────────────────
+// Chase: 다른 플레이어를 피해 몬스터 주변 최적 각도로 목적지 계산
+// ──────────────────────────────────────────────────────────────────
+function calcChaseDestination(myX, myY, monX, monY, stopDist) {
+  // 몬스터 근처(stopDist * 2.5 이내)에 있는 다른 플레이어의 각도 수집
+  const occupied = [];
+  for (const pl of gameState.players) {
+    if (Math.hypot(pl.x - monX, pl.y - monY) < stopDist * 2.5)
+      occupied.push(Math.atan2(pl.y - monY, pl.x - monX));
+  }
+
+  // 내 현재 각도 (몬스터 기준)
+  const myAng = Math.atan2(myY - monY, myX - monX);
+
+  // 60° 간격으로 후보 각도 생성 (현재 각도 중심, 양쪽으로 탐색)
+  const step = Math.PI / 3;
+  const candidates = [myAng];
+  for (let i = 1; i <= 5; i++) {
+    candidates.push(myAng + step * i);
+    candidates.push(myAng - step * i);
+  }
+
+  let bestAng = myAng, bestScore = -Infinity;
+  for (const cand of candidates) {
+    // 점유된 각도들과의 최소 각도 거리
+    let minSep = Math.PI;
+    for (const occ of occupied) {
+      let diff = Math.abs(cand - occ) % (2 * Math.PI);
+      if (diff > Math.PI) diff = 2 * Math.PI - diff;
+      if (diff < minSep) minSep = diff;
+    }
+    // 현재 각도에서의 회전 비용
+    let rot = Math.abs(cand - myAng) % (2 * Math.PI);
+    if (rot > Math.PI) rot = 2 * Math.PI - rot;
+    // 점수: 다른 플레이어와 멀수록 유리, 회전 비용 작을수록 유리
+    const score = minSep * 2 - rot;
+    if (score > bestScore) { bestScore = score; bestAng = cand; }
+  }
+
+  return {
+    x: Math.max(0, Math.min(99.9, +(monX + Math.cos(bestAng) * stopDist).toFixed(1))),
+    y: Math.max(0, Math.min(99.9, +(monY + Math.sin(bestAng) * stopDist).toFixed(1)))
+  };
+}
+
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'a' || e.key === 'A') toggleAutoAttack();
+  if (e.key === 'Escape') {
+    if (selectedMonster) {
+      log('sys', `타겟 선택 해제 — ${selectedMonster.name}`);
+      selectedMonster = null;
+      chaseInRange = false;
+    }
+    manualMoveTarget = null;
+    updateTargetPanel();
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────
+// Log
+// ──────────────────────────────────────────────────────────────────
+const MAX_LOG = 120;
+function log(type, msg) {
+  const list = document.getElementById('logList');
+  const el = document.createElement('div');
+  el.className = 'log-' + type;
+  const ts = new Date().toLocaleTimeString('ko-KR', { hour12: false });
+  el.textContent = `[${ts}] ${msg}`;
+  list.appendChild(el);
+  if (list.children.length > MAX_LOG) list.removeChild(list.firstChild);
+  list.scrollTop = list.scrollHeight;
+}
+</script>
+</body>
+</html>

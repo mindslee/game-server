@@ -1,0 +1,14 @@
+# Build output
+build/
+
+# IDE
+.vscode/
+.vs/
+
+# Claude settings
+.claude/
+
+# Generated files
+null
+*.pdb
+docs.html
